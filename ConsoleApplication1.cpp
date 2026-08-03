@@ -452,7 +452,7 @@ namespace GitWrapper {
             std::function<void(int, int, int)>* transfer = nullptr;
         };
 
-        static inline CallbackPayload cb_payload = CallbackPayload();
+        CallbackPayload cb_payload = CallbackPayload();
         
         git_repository* repo = nullptr;
         std::string path;
@@ -495,22 +495,16 @@ namespace GitWrapper {
         }
 
         static int ProgressCallback(const char* str, int len, void* payload) {
-            if (payload) {
-                if (str && len > 0) {
-                    if (cb_payload.progress)
-                        (*cb_payload.progress)(std::string(str, len));
-                }
-            }
+            if (!payload || !(str && len > 0)) return 0;
+            if (CallbackPayload* context = (CallbackPayload*)payload; context && context->progress)
+                (*context->progress)(std::string(str, len));
             return 0;
         }
 
         static int TransferProgressCallback(const git_transfer_progress* stats, void* payload) {
-            if (payload && stats) {
-                if (stats) {
-                    if (cb_payload.transfer)
-                        (*cb_payload.transfer)(stats->received_objects, stats->total_objects, stats->indexed_objects);
-                }
-            }
+            if (!payload || !stats) return 0;
+            if (CallbackPayload* context = (CallbackPayload*)payload; context && context->transfer)
+                (*context->transfer)(stats->received_objects, stats->total_objects, stats->indexed_objects);
             return 0;
         }
 
