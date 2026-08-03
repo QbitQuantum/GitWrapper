@@ -538,7 +538,7 @@ namespace GitWrapper {
         }
 
         // Открыть существующий репозиторий
-        void Open(const std::string& path, bool bare = false) {
+        void Open(const std::string& path) {
             this->path = path;
             Open();
         }
