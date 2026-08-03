@@ -519,6 +519,18 @@ namespace GitWrapper {
                 };
         }
 
+        void InitialCallbacksStatus(git_remote_callbacks& callbacks) {
+            if (cb_payload.progress) {
+                callbacks.sideband_progress = ProgressCallback;
+                callbacks.payload = &cb_payload;
+            }
+
+            if (cb_payload.transfer) {
+                callbacks.transfer_progress = TransferProgressCallback;
+                callbacks.payload = &cb_payload;
+            }
+        }
+
     public:
         GitRepository() = default;
 
@@ -562,23 +574,13 @@ namespace GitWrapper {
             std::function<void(const std::string&)> progress_callback = nullptr,
             std::function<void(int, int, int)> transfer_callback = nullptr) {
             Close();
-
-            
-            git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
-            InitialCallbacksCredentials(opts.fetch_opts.callbacks);
-
             cb_payload.progress = &progress_callback;
             cb_payload.transfer = &transfer_callback;
-
-            if (progress_callback) {
-                opts.fetch_opts.callbacks.sideband_progress = ProgressCallback;
-                opts.fetch_opts.callbacks.payload = &cb_payload;
-            }
-
-            if (transfer_callback) {
-                opts.fetch_opts.callbacks.transfer_progress = TransferProgressCallback;
-                opts.fetch_opts.callbacks.payload = &cb_payload;
-            }
+            
+            git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
+            
+            InitialCallbacksCredentials(opts.fetch_opts.callbacks);
+            InitialCallbacksStatus(opts.fetch_opts.callbacks);
 
             int error = git_clone(&repo, url.c_str(), local_path.c_str(), &opts);
             GitException::Check(error);
