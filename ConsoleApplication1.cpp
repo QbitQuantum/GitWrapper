@@ -455,7 +455,7 @@ namespace GitWrapper {
         CallbackPayload cb_payload = CallbackPayload();
         
         git_repository* repo = nullptr;
-        std::string path;
+        std::string directory;
         bool isOpen = false;
         GitCredentials credentials;
 
@@ -542,25 +542,21 @@ namespace GitWrapper {
             Close();
         }
 
-        void Open() {
+        // Создать новый репозиторий
+        void Init(const std::string& path, bool bare = false) {
             Close();
-            int error = git_repository_open(&repo, path.c_str());
+            directory = path;
+            int error = git_repository_init(&repo, directory.c_str(), bare);
             GitException::Check(error);
             isOpen = true;
         }
 
         // Открыть существующий репозиторий
         void Open(const std::string& path) {
-            this->path = path;
-            Open();
-        }
-
-        // Создать новый репозиторий
-        void Init(const std::string& path, bool bare = false) {
             Close();
-            int error = git_repository_init(&repo, path.c_str(), bare);
+            directory = path;
+            int error = git_repository_open(&repo, path.c_str());
             GitException::Check(error);
-            this->path = path;
             isOpen = true;
         }
 
@@ -581,12 +577,8 @@ namespace GitWrapper {
             
             InitialCallbacksCredentials(opts.fetch_opts.callbacks);
             InitialCallbacksStatus(opts.fetch_opts.callbacks);
-
             int error = git_clone(&repo, url.c_str(), local_path.c_str(), &opts);
             GitException::Check(error);
-
-            this->path = local_path;
-            isOpen = true;
         }
 
         void Close() {
@@ -594,6 +586,7 @@ namespace GitWrapper {
                 git_repository_free(repo);
                 repo = nullptr;
                 isOpen = false;
+                directory = "";
             }
         }
 
@@ -916,7 +909,7 @@ namespace GitWrapper {
 
         // Получить информацию о репозитории
         std::string GetPath() const {
-            return path;
+            return directory;
         }
 
         bool IsOpen() const {
@@ -958,7 +951,7 @@ namespace GitWrapper {
 
         // Разрешаем перемещение
         GitRepository(GitRepository&& other) noexcept
-            : repo(other.repo), path(std::move(other.path)), isOpen(other.isOpen),
+            : repo(other.repo), directory(std::move(other.directory)), isOpen(other.isOpen),
             credentials(std::move(other.credentials)) {
             other.repo = nullptr;
             other.isOpen = false;
@@ -968,7 +961,7 @@ namespace GitWrapper {
             if (this != &other) {
                 Close();
                 repo = other.repo;
-                path = std::move(other.path);
+                directory = std::move(other.directory);
                 isOpen = other.isOpen;
                 credentials = std::move(other.credentials);
                 other.repo = nullptr;
@@ -1070,6 +1063,7 @@ namespace GitWrapper {
             GitRepository repo;
             repo.SetCredentials(GitCredentials::Anonymous());
             repo.Clone(url, path, progress, transfer);
+            repo.Open(path);
             return repo;
         }
     };
@@ -1113,7 +1107,8 @@ int main() {
         std::cout << "Repository cloned successfully!" << std::endl;
         std::cout << "Path: " << repo1.GetPath() << std::endl;
 
-        repo1.Open();
+        repo1.Close();
+
     }
     catch (const GitWrapper::GitException& e) {
         std::cerr << "Error: " << e.what() << std::endl;
