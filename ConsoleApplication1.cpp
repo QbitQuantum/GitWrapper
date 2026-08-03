@@ -1060,11 +1060,7 @@ namespace GitWrapper {
             std::function<void(const std::string&)> progress = nullptr,
             std::function<void(int, int, int)> transfer = nullptr) 
         {
-            GitRepository repo;
-            repo.SetCredentials(GitCredentials::Anonymous());
-            repo.Clone(url, path, progress, transfer);
-            repo.Open(path);
-            return repo;
+            return CloneRepository(url, path, GitCredentials::Anonymous(), progress, transfer);
         }
     };
 
