@@ -532,13 +532,21 @@ namespace GitWrapper {
             return 0;
         }
 
-        void InitialCallbacks(git_remote_callbacks& callbacks) {
+        void InitialCallbacks(
+            git_remote_callbacks& callbacks, 
+            std::function<void(const std::string&)> progress_callback = nullptr,
+            std::function<void(int, int, int)> transfer_callback = nullptr) {
             
+            cb_payload.progress = &progress_callback;
+            cb_payload.transfer = &transfer_callback;
+
+            // Лишний раз в клюбэках не проверять на наличие указателей функций
+            if (cb_payload.progress && cb_payload.transfer)
+                callbacks.payload = &cb_payload;
+
             callbacks.credentials = CredentialsCallback;
             callbacks.sideband_progress = ProgressCallback;
             callbacks.transfer_progress = TransferProgressCallback;
-
-            callbacks.payload = &cb_payload;
 
             callbacks.certificate_check = [](git_cert* cert, int valid, const char* host, void* payload) -> int {
                 (void)cert;
@@ -587,11 +595,9 @@ namespace GitWrapper {
             std::function<void(const std::string&)> progress_callback = nullptr,
             std::function<void(int, int, int)> transfer_callback = nullptr) {
             Close();
-            cb_payload.progress = &progress_callback;
-            cb_payload.transfer = &transfer_callback;
             
             git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
-            InitialCallbacks(opts.fetch_opts.callbacks);
+            InitialCallbacks(opts.fetch_opts.callbacks, progress_callback, transfer_callback);
 
             int error = git_clone(&repo, url.c_str(), local_path.c_str(), &opts);
             GitException::Check(error);
@@ -814,11 +820,8 @@ namespace GitWrapper {
             int error = git_remote_lookup(&remote, repo, remote_name.c_str());
             GitException::Check(error);
 
-            cb_payload.progress = &progress_callback;
-            cb_payload.transfer = &transfer_callback;
-
             git_fetch_options opts = GIT_FETCH_OPTIONS_INIT;
-            InitialCallbacks(opts.callbacks);
+            InitialCallbacks(opts.callbacks, progress_callback, transfer_callback);
 
             error = git_remote_fetch(remote, nullptr, &opts, nullptr);
             git_remote_free(remote);
@@ -898,10 +901,8 @@ namespace GitWrapper {
 
             std::string branch_ref = "refs/heads/" + branch_name;
 
-            cb_payload.progress = &progress_callback;
-
             git_push_options opts = GIT_PUSH_OPTIONS_INIT;
-            InitialCallbacks(opts.callbacks);
+            InitialCallbacks(opts.callbacks, progress_callback);
 
             const char* refspec = branch_ref.c_str();
             git_strarray refspecs;
