@@ -69,20 +69,24 @@ namespace GitWrapper {
     };
 
     struct GitCredentials {
+        
+        enum class Type 
+        {
+            NONE,
+            TOKEN,
+            SSH_KEY,
+        };
+
+        Type type = Type::NONE;
+
         std::string username;
-        std::string password;
         std::string token;
+
         std::string ssh_private_key_path;
         std::string ssh_public_key_path;
         std::string ssh_passphrase;
 
-        enum class Type {
-            NONE,
-            USERPASS,
-            SSH_KEY,
-            SSH_AGENT,
-            USERNAME_ONLY
-        } type = Type::NONE;
+        int attempt_count = 0;
 
         // Для анонимного доступа
         static GitCredentials Anonymous() {
@@ -104,6 +108,15 @@ namespace GitWrapper {
             return creds;
         }
 
+        static GitCredentials Token(const std::string& username, const std::string& token) {
+            GitCredentials creds;
+            creds.type = Type::TOKEN;
+            creds.username = username;
+            creds.token = token;
+            return creds;
+        }
+
+        /*
         // Для доступа через SSH агент
         static GitCredentials SSH_AGENT(const std::string& user = "") {
             GitCredentials creds;
@@ -111,22 +124,8 @@ namespace GitWrapper {
             creds.username = user;
             return creds;
         }
+        */
 
-        // Только имя пользователя
-        static GitCredentials UsernameOnly(const std::string& user) {
-            GitCredentials creds;
-            creds.type = Type::USERNAME_ONLY;
-            creds.username = user;
-            return creds;
-        }
-
-        static GitCredentials Token(const std::string& token) {
-            GitCredentials creds;
-            creds.type = Type::USERPASS;
-            creds.password = token;
-            creds.token = token;
-            return creds;
-        }
     };
 
     class GitStatusList {
@@ -450,6 +449,7 @@ namespace GitWrapper {
         struct CallbackPayload {
             std::function<void(const std::string&)>* progress = nullptr;
             std::function<void(int, int, int)>* transfer = nullptr;
+            GitCredentials credentials;
         };
 
         CallbackPayload cb_payload = CallbackPayload();
@@ -457,33 +457,55 @@ namespace GitWrapper {
         git_repository* repo = nullptr;
         std::string directory;
         bool isOpen = false;
-        GitCredentials credentials;
 
-        static int CredentialsCallback(git_cred** out, const char* url,
+        static int CredentialsCallback(
+            git_cred** out,
+            const char* url,
             const char* username_from_url,
-            unsigned int allowed_types, void* payload) {
-
+            unsigned int allowed_types, void* payload)
+        {
+            // Если payload пустой, мы не можем получить токен или ключ — прерываем операцию
             if (!payload) {
-                return git_cred_userpass_plaintext_new(out, "anonymous", "");
+                return GIT_EAUTH;
             }
 
-            GitCredentials* creds = static_cast<GitCredentials*>(payload);
+            CallbackPayload* context = (CallbackPayload*)payload;
+            
+            // Если context неккоректный, мы не можем получить токен или ключ — прерываем операцию
+            if (!context) {
+                return GIT_EAUTH;
+            }
 
-            if (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) {
+            auto creds = &context->credentials;
+
+            // Защита от бесконечного цикла при неверном токене или ключе
+            if (creds->attempt_count > 0) {
+                return GIT_EAUTH;
+            }
+            creds->attempt_count++;
+
+            // 1. Современный HTTPS: Авторизация через Personal Access Token
+            if (creds->type == GitCredentials::Type::TOKEN && (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT)) {
+                if (creds->token.empty()) {
+                    return GIT_EAUTH; // Без токена выполнение современного HTTPS невозможно
+                }
+
+                // Для GitHub/GitLab имя пользователя может быть любым (например, "git"), 
+                // но если оно есть в URL или структуре — используем его.
                 std::string username = creds->username.empty() ?
                     (username_from_url ? username_from_url : "git") :
                     creds->username;
 
-                std::string password = !creds->token.empty() ?
-                    creds->token : creds->password;
-
-                return git_cred_userpass_plaintext_new(out,
-                    username.c_str(),
-                    password.c_str());
+                // Токен передается в целевое поле пароля
+                return git_cred_userpass_plaintext_new(out, username.c_str(), creds->token.c_str());
             }
 
-            if (allowed_types & GIT_CREDENTIAL_SSH_KEY &&
-                creds->type == GitCredentials::Type::SSH_KEY) {
+            // 2. Современный SSH: Авторизация по приватным ключам
+            if (creds->type == GitCredentials::Type::SSH_KEY && (allowed_types & GIT_CREDENTIAL_SSH_KEY)) {
+                if (creds->ssh_private_key_path.empty()) {
+                    return GIT_EAUTH; // Без приватного ключа SSH-авторизация невозможна
+                }
+
                 return git_cred_ssh_key_new(out,
                     creds->username.empty() ? "git" : creds->username.c_str(),
                     creds->ssh_public_key_path.empty() ? nullptr : creds->ssh_public_key_path.c_str(),
@@ -491,8 +513,10 @@ namespace GitWrapper {
                     creds->ssh_passphrase.empty() ? nullptr : creds->ssh_passphrase.c_str());
             }
 
-            return GIT_ERROR;
+            // Если тип credentials не совпадает с тем, что просит сервер
+            return GIT_PASSTHROUGH;
         }
+
 
         static int ProgressCallback(const char* str, int len, void* payload) {
             if (!payload || !(str && len > 0)) return 0;
@@ -509,26 +533,19 @@ namespace GitWrapper {
         }
 
         void InitialCallbacksCredentials(git_remote_callbacks& callbacks) {
+            
             callbacks.credentials = CredentialsCallback;
-            callbacks.payload = &credentials;
+            callbacks.sideband_progress = ProgressCallback;
+            callbacks.transfer_progress = TransferProgressCallback;
+
+            callbacks.payload = &cb_payload;
+
             callbacks.certificate_check = [](git_cert* cert, int valid, const char* host, void* payload) -> int {
                 (void)cert;
                 (void)host;
                 (void)payload;
                 return valid ? 0 : 1;
                 };
-        }
-
-        void InitialCallbacksStatus(git_remote_callbacks& callbacks) {
-            if (cb_payload.progress) {
-                callbacks.sideband_progress = ProgressCallback;
-                callbacks.payload = &cb_payload;
-            }
-
-            if (cb_payload.transfer) {
-                callbacks.transfer_progress = TransferProgressCallback;
-                callbacks.payload = &cb_payload;
-            }
         }
 
     public:
@@ -562,7 +579,7 @@ namespace GitWrapper {
 
         // Установка учетных данных для аутентификации
         void SetCredentials(const GitCredentials& creds) {
-            credentials = creds;
+            cb_payload.credentials = creds;
         }
 
         // Клонировать репозиторий
@@ -576,7 +593,7 @@ namespace GitWrapper {
             git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
             
             InitialCallbacksCredentials(opts.fetch_opts.callbacks);
-            InitialCallbacksStatus(opts.fetch_opts.callbacks);
+
             int error = git_clone(&repo, url.c_str(), local_path.c_str(), &opts);
             GitException::Check(error);
         }
@@ -952,7 +969,7 @@ namespace GitWrapper {
         // Разрешаем перемещение
         GitRepository(GitRepository&& other) noexcept
             : repo(other.repo), directory(std::move(other.directory)), isOpen(other.isOpen),
-            credentials(std::move(other.credentials)) {
+            cb_payload(std::move(other.cb_payload)) {
             other.repo = nullptr;
             other.isOpen = false;
         }
@@ -963,7 +980,7 @@ namespace GitWrapper {
                 repo = other.repo;
                 directory = std::move(other.directory);
                 isOpen = other.isOpen;
-                credentials = std::move(other.credentials);
+                cb_payload = std::move(other.cb_payload);
                 other.repo = nullptr;
                 other.isOpen = false;
             }
@@ -1090,7 +1107,7 @@ int main() {
     try {
         GitWrapper::Git git;
 
-        auto token_creds = GitWrapper::GitCredentials::Token(USER_GHP_TOKEN);
+        auto token_creds = GitWrapper::GitCredentials::Token(USER_NAME, USER_GHP_TOKEN);
 
         auto repo1 = git.CloneRepository(
             USER_URL_REPO,
