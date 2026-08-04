@@ -532,14 +532,8 @@ namespace GitWrapper {
             return 0;
         }
 
-        void InitialCallbacks(
-            git_remote_callbacks& callbacks, 
-            std::function<void(const std::string&)> progress_callback = nullptr,
-            std::function<void(int, int, int)> transfer_callback = nullptr) {
+        void InitialCallbacks(git_remote_callbacks& callbacks) {
             
-            cb_payload.progress = &progress_callback;
-            cb_payload.transfer = &transfer_callback;
-
             // Лишний раз в клюбэках не проверять на наличие указателей функций
             if (cb_payload.progress && cb_payload.transfer)
                 callbacks.payload = &cb_payload;
@@ -604,8 +598,11 @@ namespace GitWrapper {
             std::function<void(const std::string&)> progress_callback = nullptr,
             std::function<void(int, int, int)> transfer_callback = nullptr) {
             
+            cb_payload.progress = &progress_callback;
+            cb_payload.transfer = &transfer_callback;
+
             git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
-            InitialCallbacks(opts.fetch_opts.callbacks, progress_callback, transfer_callback);
+            InitialCallbacks(opts.fetch_opts.callbacks);
 
             Clone(path, url, opts);
         }
@@ -827,8 +824,11 @@ namespace GitWrapper {
             int error = git_remote_lookup(&remote, repo, remote_name.c_str());
             GitException::Check(error);
 
+            cb_payload.progress = &progress_callback;
+            cb_payload.transfer = &transfer_callback;
+
             git_fetch_options opts = GIT_FETCH_OPTIONS_INIT;
-            InitialCallbacks(opts.callbacks, progress_callback, transfer_callback);
+            InitialCallbacks(opts.callbacks);
 
             error = git_remote_fetch(remote, nullptr, &opts, nullptr);
             git_remote_free(remote);
@@ -893,7 +893,8 @@ namespace GitWrapper {
 
         // Push
         void Push(const std::string& remote_name = "origin", const std::string& branch = "",
-            std::function<void(const std::string&)> progress_callback = nullptr) {
+            std::function<void(const std::string&)> progress_callback = nullptr,
+            std::function<void(int, int, int)> transfer_callback = nullptr) {
             if (!isOpen) throw GitException("Repository not open");
 
             git_remote* remote = nullptr;
@@ -908,8 +909,11 @@ namespace GitWrapper {
 
             std::string branch_ref = "refs/heads/" + branch_name;
 
+            cb_payload.progress = &progress_callback;
+            cb_payload.transfer = &transfer_callback;
+
             git_push_options opts = GIT_PUSH_OPTIONS_INIT;
-            InitialCallbacks(opts.callbacks, progress_callback);
+            InitialCallbacks(opts.callbacks);
 
             const char* refspec = branch_ref.c_str();
             git_strarray refspecs;
