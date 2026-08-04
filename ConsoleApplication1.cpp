@@ -585,22 +585,29 @@ namespace GitWrapper {
             isOpen = true;
         }
 
+        // Клонировать веб-репозиторий
+        void Clone(const std::string& path, const std::string& url, const git_clone_options& opts) {
+            Close();
+            directory = path;
+            int error = git_clone(&repo, url.c_str(), directory.c_str(), &opts);
+            GitException::Check(error);
+            isOpen = true;
+        }
+
         // Установка учетных данных для аутентификации
         void SetCredentials(const GitCredentials& creds) {
             cb_payload.credentials = creds;
         }
 
         // Клонировать репозиторий
-        void Clone(const std::string& url, const std::string& local_path,
+        void Clone(const std::string& url, const std::string& path,
             std::function<void(const std::string&)> progress_callback = nullptr,
             std::function<void(int, int, int)> transfer_callback = nullptr) {
-            Close();
             
             git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
             InitialCallbacks(opts.fetch_opts.callbacks, progress_callback, transfer_callback);
 
-            int error = git_clone(&repo, url.c_str(), local_path.c_str(), &opts);
-            GitException::Check(error);
+            Clone(path, url, opts);
         }
 
         void Close() {
