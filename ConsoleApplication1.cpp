@@ -349,9 +349,18 @@ namespace GitWrapper {
 
     class GitBranch {
     private:
-        git_branch_t type;
         git_reference* ref = nullptr;
+        git_repository* repo = nullptr;
+        git_branch_t type;
         bool owned = false;
+
+        void Init(git_reference* branch_ref, git_repository* branch_repo, git_branch_t branch_type, bool branch_owned = true)
+        {
+            ref = branch_ref;
+            repo = branch_repo;
+            type = branch_type;
+            owned = branch_owned;
+        }
 
     public:
         GitBranch() : type(GIT_BRANCH_LOCAL) {}
@@ -360,19 +369,23 @@ namespace GitWrapper {
             Clear();
         }
 
+        void Load(git_repository* repo, git_branch_t branch_type = GIT_BRANCH_LOCAL) {
+            Clear();
+            int error = git_repository_head(&ref, repo);
+            GitException::Check(error);
+            Init(ref, repo, branch_type);
+        }
+
         void Load(git_repository* repo, const std::string& name, git_branch_t branch_type = GIT_BRANCH_LOCAL) {
             Clear();
             int error = git_branch_lookup(&ref, repo, name.c_str(), branch_type);
             GitException::Check(error);
-            owned = true;
-            type = branch_type;
+            Init(ref, repo, branch_type);
         }
 
-        void Load(git_reference* ref, git_branch_t branch_type) {
+        void Load(git_repository* repo, git_reference* ref, git_branch_t branch_type = GIT_BRANCH_LOCAL) {
             Clear();
-            this->ref = ref;
-            owned = false;
-            this->type = branch_type;
+            Init(ref, repo, branch_type);
         }
 
         std::string GetName() const {
@@ -387,7 +400,7 @@ namespace GitWrapper {
             return git_reference_name(ref);
         }
 
-        GitCommit GetCommit(git_repository* repo) const {
+        GitCommit GetCommit() const {
             if (!ref) throw GitException("Branch not loaded");
 
             const git_oid* oid = git_reference_target(ref);
@@ -651,13 +664,8 @@ namespace GitWrapper {
         // Ветки
         GitBranch GetCurrentBranch() {
             if (!isOpen) throw GitException("Repository not open");
-
-            git_reference* head = nullptr;
-            int error = git_repository_head(&head, repo);
-            GitException::Check(error);
-
             GitBranch branch;
-            branch.Load(head, GIT_BRANCH_LOCAL);
+            branch.Load(repo, GIT_BRANCH_LOCAL);
             return branch;
         }
 
@@ -683,7 +691,7 @@ namespace GitWrapper {
             while (git_branch_next(&ref, &branch_type, iter) == 0) {
                 try {
                     GitBranch branch;
-                    branch.Load(ref, branch_type);
+                    branch.Load(repo, ref, branch_type);
                     branches.push_back(std::move(branch));
                 }
                 catch (const GitException&) {
@@ -1121,6 +1129,11 @@ int main() {
         std::cout << "Repository cloned successfully!" << std::endl;
         std::cout << "Path: " << repo1.GetPath() << std::endl;
 
+        auto branch = repo1.GetBranch("main");
+        
+        std::cout << "branch name: [" + branch.GetName() << "]\n";
+        std::cout << "branch is head ? " + std::string((branch.IsHead() ? "YES" : "NO")) << "\n";
+        
         repo1.Close();
 
     }
