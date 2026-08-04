@@ -10,6 +10,29 @@
 #include <map>
 #include <iomanip>
 
+#include <windows.h>
+
+std::string Utf8ToWindows1251(const std::string& utf8_str) {
+    if (utf8_str.empty()) return "";
+
+    // Получаем размер буфера для wide-строки
+    int wide_size = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, nullptr, 0);
+    if (wide_size == 0) return utf8_str;
+
+    std::wstring wide_str(wide_size, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, &wide_str[0], wide_size);
+
+    // Конвертируем wide в Windows-1251
+    int ansi_size = WideCharToMultiByte(CP_ACP, 0, wide_str.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (ansi_size == 0) return utf8_str;
+
+    std::string result(ansi_size, '\0');
+    WideCharToMultiByte(CP_ACP, 0, wide_str.c_str(), -1, &result[0], ansi_size, nullptr, nullptr);
+
+    result.pop_back(); // Убираем завершающий нуль
+    return result;
+}
+
 namespace GitWrapper {
 
     class GitException : public std::runtime_error {
@@ -247,9 +270,9 @@ namespace GitWrapper {
             owned = true;
         }
 
-        void Load(git_repository* repo, const std::string& oid_str) {
+        void Load(git_repository* repo, const std::string& hash) {
             git_oid oid;
-            int error = git_oid_fromstr(&oid, oid_str.c_str());
+            int error = git_oid_fromstr(&oid, hash.c_str());
             GitException::Check(error);
             Load(repo, &oid);
         }
@@ -345,6 +368,10 @@ namespace GitWrapper {
             }
             return *this;
         }
+
+        static GitCommit GetCommit(git_repository* repo, const std::string& hash) {
+            return GitCommit(repo, hash);
+        }
     };
 
     class GitBranch {
@@ -400,7 +427,7 @@ namespace GitWrapper {
             return git_reference_name(ref);
         }
 
-        GitCommit GetCommit() const {
+        GitCommit HeadCommit() const {
             if (!ref) throw GitException("Branch not loaded");
 
             const git_oid* oid = git_reference_target(ref);
@@ -641,28 +668,15 @@ namespace GitWrapper {
             return status.IsModified();
         }
 
-        // Коммиты
+        // Главный коммит 
         GitCommit GetHeadCommit() {
             if (!isOpen) throw GitException("Repository not open");
-
-            git_reference* head = nullptr;
-            int error = git_repository_head(&head, repo);
-            GitException::Check(error);
-
-            const git_oid* oid = git_reference_target(head);
-            GitCommit commit(repo, oid);
-            git_reference_free(head);
-
-            return commit;
+            GitBranch branch = GetHeadBranch();
+            return branch.HeadCommit();
         }
 
-        GitCommit GetCommit(const std::string& oid_str) {
-            if (!isOpen) throw GitException("Repository not open");
-            return GitCommit(repo, oid_str);
-        }
-
-        // Ветки
-        GitBranch GetCurrentBranch() {
+        // Главная ветка
+        GitBranch GetHeadBranch() {
             if (!isOpen) throw GitException("Repository not open");
             GitBranch branch;
             branch.Load(repo, GIT_BRANCH_LOCAL);
@@ -857,7 +871,7 @@ namespace GitWrapper {
             GitException::Check(error);
 
             // Получаем ветку из удаленного репозитория
-            std::string branch_name = GetCurrentBranch().GetName();
+            std::string branch_name = GetHeadBranch().GetName();
             if (branch_name.empty()) {
                 git_reference_free(head);
                 throw GitException("No current branch");
@@ -909,7 +923,7 @@ namespace GitWrapper {
             int error = git_remote_lookup(&remote, repo, remote_name.c_str());
             GitException::Check(error);
 
-            std::string branch_name = branch.empty() ? GetCurrentBranch().GetName() : branch;
+            std::string branch_name = branch.empty() ? GetHeadBranch().GetName() : branch;
             if (branch_name.empty()) {
                 git_remote_free(remote);
                 throw GitException("No branch specified and no current branch");
@@ -1129,12 +1143,15 @@ int main() {
         std::cout << "Repository cloned successfully!" << std::endl;
         std::cout << "Path: " << repo1.GetPath() << std::endl;
 
-        auto branch = repo1.GetBranch("main");
+        auto branch1 = repo1.GetBranch("main");
         
-        std::cout << "branch name: [" + branch.GetName() << "]\n";
-        std::cout << "branch is head ? " + std::string((branch.IsHead() ? "YES" : "NO")) << "\n";
-        
-        repo1.Close();
+        std::cout << "branch name: [" + branch1.GetName() << "]\n";
+        std::cout << "branch is head ? " + std::string((branch1.IsHead() ? "YES" : "NO")) << "\n";
+
+        auto HeadCommit1 = branch1.HeadCommit();
+        auto HeadCommitInfo1 = HeadCommit1.GetInfo();
+
+        std::cout << "Author: " << HeadCommitInfo1.author.name << " <" << HeadCommitInfo1.author.email << ">\n";
 
     }
     catch (const GitWrapper::GitException& e) {
