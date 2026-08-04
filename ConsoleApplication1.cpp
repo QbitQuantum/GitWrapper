@@ -532,7 +532,7 @@ namespace GitWrapper {
             return 0;
         }
 
-        void InitialCallbacksCredentials(git_remote_callbacks& callbacks) {
+        void InitialCallbacks(git_remote_callbacks& callbacks) {
             
             callbacks.credentials = CredentialsCallback;
             callbacks.sideband_progress = ProgressCallback;
@@ -591,8 +591,7 @@ namespace GitWrapper {
             cb_payload.transfer = &transfer_callback;
             
             git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
-            
-            InitialCallbacksCredentials(opts.fetch_opts.callbacks);
+            InitialCallbacks(opts.fetch_opts.callbacks);
 
             int error = git_clone(&repo, url.c_str(), local_path.c_str(), &opts);
             GitException::Check(error);
@@ -815,18 +814,11 @@ namespace GitWrapper {
             int error = git_remote_lookup(&remote, repo, remote_name.c_str());
             GitException::Check(error);
 
+            cb_payload.progress = &progress_callback;
+            cb_payload.transfer = &transfer_callback;
+
             git_fetch_options opts = GIT_FETCH_OPTIONS_INIT;
-            InitialCallbacksCredentials(opts.callbacks);
-
-            if (progress_callback) {
-                opts.callbacks.sideband_progress = ProgressCallback;
-                opts.callbacks.payload = &progress_callback;
-            }
-
-            if (transfer_callback) {
-                opts.callbacks.transfer_progress = TransferProgressCallback;
-                opts.callbacks.payload = &transfer_callback;
-            }
+            InitialCallbacks(opts.callbacks);
 
             error = git_remote_fetch(remote, nullptr, &opts, nullptr);
             git_remote_free(remote);
@@ -906,13 +898,10 @@ namespace GitWrapper {
 
             std::string branch_ref = "refs/heads/" + branch_name;
 
-            git_push_options opts = GIT_PUSH_OPTIONS_INIT;
-            InitialCallbacksCredentials(opts.callbacks);
+            cb_payload.progress = &progress_callback;
 
-            if (progress_callback) {
-                opts.callbacks.sideband_progress = ProgressCallback;
-                opts.callbacks.payload = &progress_callback;
-            }
+            git_push_options opts = GIT_PUSH_OPTIONS_INIT;
+            InitialCallbacks(opts.callbacks);
 
             const char* refspec = branch_ref.c_str();
             git_strarray refspecs;
