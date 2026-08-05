@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "FileName.h"
 #include <git2.h>
 #include <string>
@@ -9,7 +9,7 @@
 #include <iostream>
 #include <map>
 #include <iomanip>
-
+#include <random>
 #include <windows.h>
 
 std::string Utf8ToWindows1251(const std::string& utf8_str) {
@@ -31,6 +31,15 @@ std::string Utf8ToWindows1251(const std::string& utf8_str) {
 
     result.pop_back(); // Убираем завершающий нуль
     return result;
+}
+
+// Генерация имени коммита
+std::string make_random_name() {
+    static std::random_device rd;
+    uint64_t value = (static_cast<uint64_t>(rd()) << 32) | rd();
+    char buf[13];
+    snprintf(buf, sizeof(buf), "%012llx", value);
+    return std::string(buf);
 }
 
 namespace GitWrapper {
@@ -415,6 +424,72 @@ namespace GitWrapper {
             Init(ref, repo, branch_type);
         }
 
+        // Создать коммит
+        std::string CreateCommit(const std::string& message,
+            const std::string& author_name,
+            const std::string& author_email,
+            const std::string& committer_name = "",
+            const std::string& committer_email = "") {
+            if (!ref) throw GitException("Branch not loaded");
+
+            // Получаем индекс
+            git_index* index = nullptr;
+            int error = git_repository_index(&index, repo);
+            GitException::Check(error);
+
+            // Добавляем все изменения
+            error = git_index_add_all(index, nullptr, GIT_INDEX_ADD_DEFAULT, nullptr, nullptr);
+            GitException::Check(error);
+
+            // Пишем дерево
+            git_oid tree_oid;
+            error = git_index_write_tree(&tree_oid, index);
+            GitException::Check(error);
+
+            git_index_free(index);
+
+            // Загружаем дерево
+            git_tree* tree = nullptr;
+            error = git_tree_lookup(&tree, repo, &tree_oid);
+            GitException::Check(error);
+
+            // Создаем подпись автора и коммитера
+            const std::string committer_name_used = committer_name.empty() ? author_name : committer_name;
+            const std::string committer_email_used = committer_email.empty() ? author_email : committer_email;
+
+            git_signature* author_sig = nullptr;
+            git_signature* committer_sig = nullptr;
+
+            error = git_signature_new(&author_sig, author_name.c_str(), author_email.c_str(), time(nullptr), 0);
+            GitException::Check(error);
+
+            error = git_signature_new(&committer_sig, committer_name_used.c_str(),
+                committer_email_used.c_str(), time(nullptr), 0);
+            GitException::Check(error);
+
+            // Создаем коммит
+            git_oid commit_oid;
+
+            // Загружаем родительский коммит
+            const git_commit* parents[] = { HeadCommit().GetRaw() };
+
+            error = git_commit_create(&commit_oid, repo, "HEAD",
+                author_sig, committer_sig,
+                nullptr, message.c_str(),
+                tree, 1, parents);
+
+            git_signature_free(author_sig);
+            git_signature_free(committer_sig);
+            git_tree_free(tree);
+
+            GitException::Check(error);
+
+            char oid_str[GIT_OID_HEXSZ + 1];
+            git_oid_fmt(oid_str, &commit_oid);
+            oid_str[GIT_OID_HEXSZ] = '\0';
+            return oid_str;
+        }
+
         std::string GetName() const {
             if (!ref) return "";
             const char* name = nullptr;
@@ -732,74 +807,7 @@ namespace GitWrapper {
             const std::string& committer_name = "",
             const std::string& committer_email = "") {
             if (!isOpen) throw GitException("Repository not open");
-
-            // Получаем индекс
-            git_index* index = nullptr;
-            int error = git_repository_index(&index, repo);
-            GitException::Check(error);
-
-            // Добавляем все изменения
-            error = git_index_add_all(index, nullptr, GIT_INDEX_ADD_DEFAULT, nullptr, nullptr);
-            GitException::Check(error);
-
-            // Пишем дерево
-            git_oid tree_oid;
-            error = git_index_write_tree(&tree_oid, index);
-            GitException::Check(error);
-
-            git_index_free(index);
-
-            // Загружаем дерево
-            git_tree* tree = nullptr;
-            error = git_tree_lookup(&tree, repo, &tree_oid);
-            GitException::Check(error);
-
-            // Получаем HEAD
-            git_reference* head = nullptr;
-            error = git_repository_head(&head, repo);
-            GitException::Check(error);
-
-            // Загружаем родительский коммит
-            const git_oid* parent_oid = git_reference_target(head);
-            git_commit* parent = nullptr;
-            error = git_commit_lookup(&parent, repo, parent_oid);
-            GitException::Check(error);
-
-            // Создаем подпись автора и коммитера
-            const std::string committer_name_used = committer_name.empty() ? author_name : committer_name;
-            const std::string committer_email_used = committer_email.empty() ? author_email : committer_email;
-
-            git_signature* author_sig = nullptr;
-            git_signature* committer_sig = nullptr;
-
-            error = git_signature_new(&author_sig, author_name.c_str(), author_email.c_str(), time(nullptr), 0);
-            GitException::Check(error);
-
-            error = git_signature_new(&committer_sig, committer_name_used.c_str(),
-                committer_email_used.c_str(), time(nullptr), 0);
-            GitException::Check(error);
-
-            // Создаем коммит
-            git_oid commit_oid;
-            const git_commit* parents[] = { parent };
-
-            error = git_commit_create(&commit_oid, repo, "HEAD",
-                author_sig, committer_sig,
-                nullptr, message.c_str(),
-                tree, 1, parents);
-
-            git_signature_free(author_sig);
-            git_signature_free(committer_sig);
-            git_commit_free(parent);
-            git_tree_free(tree);
-            git_reference_free(head);
-
-            GitException::Check(error);
-
-            char oid_str[GIT_OID_HEXSZ + 1];
-            git_oid_fmt(oid_str, &commit_oid);
-            oid_str[GIT_OID_HEXSZ] = '\0';
-            return oid_str;
+            return GetHeadBranch().CreateCommit(message, author_name, author_email, committer_name, committer_email);
         }
 
         // Работа с удаленными репозиториями
@@ -1127,12 +1135,15 @@ void Transfer(int received_objects, int total_objects, int indexed_objects) {
 }
 
 int main() {
+    
+    setlocale(LC_ALL, "Russian");
+
     try {
         GitWrapper::Git git;
 
         auto token_creds = GitWrapper::GitCredentials::Token(USER_NAME, USER_GHP_TOKEN);
 
-        auto repo1 = git.CloneRepository(
+        auto repostory_test = git.CloneRepository(
             USER_URL_REPO,
             "./repo_token",
             token_creds,
@@ -1141,18 +1152,24 @@ int main() {
         );
 
         std::cout << "Repository cloned successfully!" << std::endl;
-        std::cout << "Path: " << repo1.GetPath() << std::endl;
+        std::cout << "Path: " << repostory_test.GetPath() << std::endl;
 
-        auto branch1 = repo1.GetBranch("main");
+        auto main_branch = repostory_test.GetBranch("main");
         
-        std::cout << "branch name: [" + branch1.GetName() << "]\n";
-        std::cout << "branch is head ? " + std::string((branch1.IsHead() ? "YES" : "NO")) << "\n";
+        std::cout << "branch name: [" + main_branch.GetName() << "]\n";
+        std::cout << "branch is head ? " + std::string((main_branch.IsHead() ? "YES" : "NO")) << "\n";
 
-        auto HeadCommit1 = branch1.HeadCommit();
+        auto HeadCommit1 = main_branch.HeadCommit();
         auto HeadCommitInfo1 = HeadCommit1.GetInfo();
 
         std::cout << "Author: " << HeadCommitInfo1.author.name << " <" << HeadCommitInfo1.author.email << ">\n";
-        std::cout << "Messasge: " << Utf8ToWindows1251(HeadCommitInfo1.message);
+        std::cout << "Messasge: " << Utf8ToWindows1251(HeadCommitInfo1.message) << "\n";
+
+        std::string hash_commit = main_branch.CreateCommit("Коммит #" + make_random_name(), HeadCommitInfo1.author.name, HeadCommitInfo1.author.email);
+        std::cout << "Hash commit: " << hash_commit << "\n";
+        repostory_test.Push("origin", "", &Progress, &Transfer);
+
+        std::cout << "Commit pushed!" << "\n";
 
     }
     catch (const GitWrapper::GitException& e) {
