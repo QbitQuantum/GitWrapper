@@ -493,7 +493,7 @@ namespace GitWrapper {
         };
 
         CallbackPayload cb_payload = CallbackPayload();
-        
+
         git_repository* repo = nullptr;
         std::string directory;
         bool isOpen = false;
@@ -1152,6 +1152,7 @@ int main() {
         auto HeadCommitInfo1 = HeadCommit1.GetInfo();
 
         std::cout << "Author: " << HeadCommitInfo1.author.name << " <" << HeadCommitInfo1.author.email << ">\n";
+        std::cout << "Messasge: " << Utf8ToWindows1251(HeadCommitInfo1.message);
 
     }
     catch (const GitWrapper::GitException& e) {
