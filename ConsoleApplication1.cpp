@@ -33,7 +33,6 @@ inline std::string Utf8ToWindows1251(const std::string& utf8_str) {
     return result;
 }
 
-// FIX: inline
 inline std::string make_random_name() {
     static std::random_device rd;
     uint64_t value = (static_cast<uint64_t>(rd()) << 32) | rd();
@@ -756,11 +755,34 @@ namespace GitWrapper {
         }
     };
 
+    struct ProgressState {
+        int last_percent = -1;
+
+        void OnProgress(const std::string& progress) {
+            std::cout << "[PROGRESS] " << progress << std::flush;
+        }
+
+        void OnTransfer(int received_objects, int total_objects, int indexed_objects) {
+            if (total_objects <= 0) return;
+
+            int percent = (received_objects * 100) / total_objects;
+
+            if (percent != last_percent) {
+                last_percent = percent;
+
+                std::cout << "\rReceiving objects: " << percent << "% ("
+                    << received_objects << "/" << total_objects << "), "
+                    << indexed_objects << " indexed" << std::flush;
+            }
+        }
+
+        void Reset() { last_percent = -1; }
+    };
+
     class GitRepository {
     private:
         struct CallbackPayload {
-            std::function<void(const std::string&)> progress;
-            std::function<void(int, int, int)> transfer;
+            ProgressState* progress = nullptr;
             GitCredentials credentials;
         };
 
@@ -825,7 +847,7 @@ namespace GitWrapper {
             if (!payload || !str || len <= 0) return 0;
             auto* context = static_cast<CallbackPayload*>(payload);
             if (context && context->progress) {
-                context->progress(std::string(str, len));
+                context->progress->OnProgress(std::string(str, len));
             }
             return 0;
         }
@@ -833,13 +855,20 @@ namespace GitWrapper {
         static int TransferProgressCallback(const git_transfer_progress* stats, void* payload) {
             if (!payload || !stats) return 0;
             auto* context = static_cast<CallbackPayload*>(payload);
-            if (context && context->transfer) {
-                context->transfer(stats->received_objects, stats->total_objects, stats->indexed_objects);
+            if (context && context->progress) {
+                context->progress->OnTransfer(
+                    stats->received_objects,
+                    stats->total_objects,
+                    stats->indexed_objects);
             }
             return 0;
         }
 
-        void InitialCallbacks(git_remote_callbacks& callbacks) {
+        void InitialCallbacks(git_remote_callbacks& callbacks, ProgressState* progress) {
+            cb_payload.progress = progress;
+            cb_payload.credentials.attempt_count = 0;
+
+            callbacks = GIT_REMOTE_CALLBACKS_INIT;
             callbacks.payload = &cb_payload;
 
             callbacks.credentials = CredentialsCallback;
@@ -889,14 +918,10 @@ namespace GitWrapper {
         }
 
         void Clone(const std::string& url, const std::string& path,
-            std::function<void(const std::string&)> progress_callback = nullptr,
-            std::function<void(int, int, int)> transfer_callback = nullptr)
+            ProgressState* progress = nullptr)
         {
-            cb_payload.progress = progress_callback;
-            cb_payload.transfer = transfer_callback;
-
             git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
-            InitialCallbacks(opts.fetch_opts.callbacks);
+            InitialCallbacks(opts.fetch_opts.callbacks, progress);
 
             Clone(path, url, opts);
         }
@@ -1013,20 +1038,15 @@ namespace GitWrapper {
         }
 
         void Fetch(const std::string& remote_name = "origin",
-            std::function<void(const std::string&)> progress_callback = nullptr,
-            std::function<void(int, int, int)> transfer_callback = nullptr)
+            ProgressState* progress = nullptr)
         {
             if (!isOpen) throw GitException("Repository not open");
 
             git_remote* remote = nullptr;
             GitException::Check(git_remote_lookup(&remote, repo, remote_name.c_str()));
 
-            cb_payload.progress = progress_callback;
-            cb_payload.transfer = transfer_callback;
-            cb_payload.credentials.attempt_count = 0;
-
             git_fetch_options opts = GIT_FETCH_OPTIONS_INIT;
-            InitialCallbacks(opts.callbacks);
+            InitialCallbacks(opts.callbacks, progress);
 
             int error = git_remote_fetch(remote, nullptr, &opts, nullptr);
             git_remote_free(remote);
@@ -1089,12 +1109,11 @@ namespace GitWrapper {
         }
 
         void Pull(const std::string& remote_name = "origin",
-            std::function<void(const std::string&)> progress_callback = nullptr,
-            std::function<void(int, int, int)> transfer_callback = nullptr)
+            ProgressState* progress = nullptr)
         {
             try {
                 std::cout << "Fetching from " << remote_name << "..." << std::endl;
-                Fetch(remote_name, progress_callback, transfer_callback);
+                Fetch(remote_name, progress);
 
                 std::cout << "Merging changes..." << std::endl;
                 MergeFastForward(remote_name);
@@ -1118,8 +1137,7 @@ namespace GitWrapper {
         }
 
         void Push(const std::string& remote_name = "origin", const std::string& branch = "",
-            std::function<void(const std::string&)> progress_callback = nullptr,
-            std::function<void(int, int, int)> transfer_callback = nullptr)
+            ProgressState* progress = nullptr)
         {
             if (!isOpen) throw GitException("Repository not open");
 
@@ -1132,14 +1150,10 @@ namespace GitWrapper {
                 throw GitException("No branch specified and no current branch");
             }
 
-            std::string branch_ref = "refs/heads/" + branch_name;
-
-            cb_payload.progress = progress_callback;
-            cb_payload.transfer = transfer_callback;
-            cb_payload.credentials.attempt_count = 0;
+            std::string branch_ref = "refs/heads/" + branch_name + ":refs/heads/" + branch_name;
 
             git_push_options opts = GIT_PUSH_OPTIONS_INIT;
-            InitialCallbacks(opts.callbacks);
+            InitialCallbacks(opts.callbacks, progress);
 
             const char* refspec = branch_ref.c_str();
             git_strarray refspecs;
@@ -1295,48 +1309,26 @@ namespace GitWrapper {
         GitRepository CloneRepository(const std::string& url,
             const std::string& path,
             const GitCredentials& creds,
-            std::function<void(const std::string&)> progress = nullptr,
-            std::function<void(int, int, int)> transfer = nullptr)
+            ProgressState* progress = nullptr)
         {
             GitRepository repo;
             repo.SetCredentials(creds);
-            repo.Clone(url, path, progress, transfer);
+            repo.Clone(url, path, progress);
             return repo;
         }
 
         GitRepository CloneRepository(const std::string& url,
             const std::string& path,
-            std::function<void(const std::string&)> progress = nullptr,
-            std::function<void(int, int, int)> transfer = nullptr)
+            ProgressState* progress = nullptr)
         {
-            return CloneRepository(url, path, GitCredentials::Anonymous(), progress, transfer);
+            return CloneRepository(url, path, GitCredentials::Anonymous(), progress);
         }
     };
 
 } // namespace GitWrapper
 
-inline void Progress(const std::string& progress) {
-    std::cout << "[PROGRESS] " << progress << std::flush;
-}
-
-inline void Transfer(int received_objects, int total_objects, int indexed_objects) {
-    static int last_percent = -1;
-
-    if (total_objects > 0) {
-        int percent = (received_objects * 100) / total_objects;
-
-        if (percent != last_percent) {
-            last_percent = percent;
-
-            std::cout << "\rReceiving objects: " << percent << "% ("
-                << received_objects << "/" << total_objects << "), "
-                << indexed_objects << " indexed" << std::flush;
-        }
-    }
-}
-
 int main() {
-    
+
     setlocale(LC_ALL, "Russian");
 
     try {
@@ -1344,13 +1336,14 @@ int main() {
 
         auto token_creds = GitWrapper::GitCredentials::Token(USER_NAME, USER_GHP_TOKEN);
 
+        GitWrapper::ProgressState ps_clone;
+
         /*
         auto repository_test = git.CloneRepository(
             USER_URL_REPO,
             "./repo_token",
             token_creds,
-            &Progress,
-            &Transfer
+            &ps_clone
         );
         */
 
@@ -1376,15 +1369,18 @@ int main() {
             "Коммит #" + make_random_name(),
             head_info.author.name,
             head_info.author.email);
+
         std::cout << "Hash commit: " << hash_commit << "\n";
 
         // Push с прогрессом
+        GitWrapper::ProgressState ps_push;
         std::cout << "Pushing to origin..." << std::endl;
-        repository_test.Push("origin", "", Progress, Transfer);
+        repository_test.Push("origin", "", &ps_push);
         std::cout << "\nCommit pushed!" << "\n";
 
         // Pull тоже с прогрессом
-        repository_test.Pull("origin", Progress, Transfer);
+        GitWrapper::ProgressState ps_pull;
+        repository_test.Pull("origin", &ps_pull);
     }
     catch (const GitWrapper::GitException& e) {
         std::cerr << "Error: " << e.what() << std::endl;
@@ -1400,4 +1396,3 @@ int main() {
 
     return 0;
 }
-
