@@ -1,5 +1,4 @@
 
-#include "FileName.h"
 #include <git2.h>
 #include <string>
 #include <vector>
@@ -11,6 +10,9 @@
 #include <iomanip>
 #include <random>
 #include <windows.h>
+
+// USER_NAME, USER_GHP_TOKEN, USER_URL_REPO
+#include "FileName.h"
 
 inline std::string Utf8ToWindows1251(const std::string& utf8_str) {
     if (utf8_str.empty()) return "";
