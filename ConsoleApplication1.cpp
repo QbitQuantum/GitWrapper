@@ -12,29 +12,27 @@
 #include <random>
 #include <windows.h>
 
-std::string Utf8ToWindows1251(const std::string& utf8_str) {
+inline std::string Utf8ToWindows1251(const std::string& utf8_str) {
     if (utf8_str.empty()) return "";
 
-    // Получаем размер буфера для wide-строки
     int wide_size = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, nullptr, 0);
     if (wide_size == 0) return utf8_str;
 
     std::wstring wide_str(wide_size, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, &wide_str[0], wide_size);
 
-    // Конвертируем wide в Windows-1251
     int ansi_size = WideCharToMultiByte(CP_ACP, 0, wide_str.c_str(), -1, nullptr, 0, nullptr, nullptr);
     if (ansi_size == 0) return utf8_str;
 
     std::string result(ansi_size, '\0');
     WideCharToMultiByte(CP_ACP, 0, wide_str.c_str(), -1, &result[0], ansi_size, nullptr, nullptr);
 
-    result.pop_back(); // Убираем завершающий нуль
+    result.pop_back();
     return result;
 }
 
-// Генерация имени коммита
-std::string make_random_name() {
+// FIX: inline
+inline std::string make_random_name() {
     static std::random_device rd;
     uint64_t value = (static_cast<uint64_t>(rd()) << 32) | rd();
     char buf[13];
@@ -83,8 +81,8 @@ namespace GitWrapper {
     struct GitSignature {
         std::string name;
         std::string email;
-        time_t time;
-        int offset;  // часовой пояс в минутах
+        time_t time = 0;
+        int offset = 0;
 
         std::string ToString() const {
             return name + " <" + email + ">";
@@ -96,13 +94,13 @@ namespace GitWrapper {
         std::string message;
         GitSignature author;
         GitSignature committer;
-        time_t commit_time;
+        time_t commit_time = 0;
         std::vector<std::string> parents;
     };
 
     struct GitCredentials {
-        
-        enum class Type 
+
+        enum class Type
         {
             NONE,
             TOKEN,
@@ -120,14 +118,12 @@ namespace GitWrapper {
 
         int attempt_count = 0;
 
-        // Для анонимного доступа
         static GitCredentials Anonymous() {
             GitCredentials creds;
             creds.type = Type::NONE;
             return creds;
         }
 
-        // Для доступа по SSH ключу
         static GitCredentials SSHKey(
             const std::string& private_key_path,
             const std::string& public_key_path = "",
@@ -147,17 +143,6 @@ namespace GitWrapper {
             creds.token = token;
             return creds;
         }
-
-        /*
-        // Для доступа через SSH агент
-        static GitCredentials SSH_AGENT(const std::string& user = "") {
-            GitCredentials creds;
-            creds.type = Type::SSH_AGENT;
-            creds.username = user;
-            return creds;
-        }
-        */
-
     };
 
     class GitStatusList {
@@ -227,11 +212,9 @@ namespace GitWrapper {
             }
         }
 
-        // Запрещаем копирование
         GitStatusList(const GitStatusList&) = delete;
         GitStatusList& operator=(const GitStatusList&) = delete;
 
-        // Разрешаем перемещение
         GitStatusList(GitStatusList&& other) noexcept
             : status(other.status), count(other.count) {
             other.status = nullptr;
@@ -353,11 +336,9 @@ namespace GitWrapper {
             owned = false;
         }
 
-        // Запрещаем копирование
         GitCommit(const GitCommit&) = delete;
         GitCommit& operator=(const GitCommit&) = delete;
 
-        // Разрешаем перемещение
         GitCommit(GitCommit&& other) noexcept
             : commit(other.commit), repo(other.repo), owned(other.owned) {
             other.commit = nullptr;
@@ -383,6 +364,242 @@ namespace GitWrapper {
         }
     };
 
+    class GitTree {
+        git_tree* tree = nullptr;
+        bool owned = true;
+
+    public:
+        GitTree() = default;
+        ~GitTree() { Clear(); }
+
+        GitTree(const GitTree&) = delete;
+        GitTree& operator=(const GitTree&) = delete;
+
+        GitTree(GitTree&& o) noexcept : tree(o.tree), owned(o.owned) {
+            o.tree = nullptr;
+            o.owned = false;
+        }
+        GitTree& operator=(GitTree&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                tree = o.tree;
+                owned = o.owned;
+                o.tree = nullptr;
+                o.owned = false;
+            }
+            return *this;
+        }
+
+        void Load(git_repository* repo, const git_oid* oid) {
+            Clear();
+            GitException::Check(git_tree_lookup(&tree, repo, oid));
+            owned = true;
+        }
+
+        void LoadFromCommit(git_commit* commit) {
+            Clear();
+            GitException::Check(git_commit_tree(&tree, commit));
+            owned = true;
+        }
+
+        void Clear() {
+            if (tree && owned) {
+                git_tree_free(tree);
+            }
+            tree = nullptr;
+            owned = false;
+        }
+
+        bool IsValid() const { return tree != nullptr; }
+        git_tree* GetRaw() const { return tree; }
+        const git_tree* GetRawConst() const { return tree; }
+    };
+
+    class GitIndex {
+        git_index* index = nullptr;
+
+    public:
+        GitIndex() = default;
+        ~GitIndex() { Clear(); }
+
+        GitIndex(const GitIndex&) = delete;
+        GitIndex& operator=(const GitIndex&) = delete;
+
+        GitIndex(GitIndex&& o) noexcept : index(o.index) { o.index = nullptr; }
+        GitIndex& operator=(GitIndex&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                index = o.index;
+                o.index = nullptr;
+            }
+            return *this;
+        }
+
+        void Load(git_repository* repo) {
+            Clear();
+            GitException::Check(git_repository_index(&index, repo));
+        }
+
+        void Clear() {
+            if (index) {
+                git_index_free(index);
+                index = nullptr;
+            }
+        }
+
+        bool IsValid() const { return index != nullptr; }
+        git_index* GetRaw() const { return index; }
+
+        void AddAll(unsigned int flags = GIT_INDEX_ADD_DEFAULT) {
+            if (!index) throw GitException("Index not loaded");
+            GitException::Check(git_index_add_all(index, nullptr, flags, nullptr, nullptr));
+        }
+
+        void WriteTree(git_oid* out_tree_oid) {
+            if (!index) throw GitException("Index not loaded");
+            GitException::Check(git_index_write_tree(out_tree_oid, index));
+        }
+
+        void Write() {
+            if (!index) throw GitException("Index not loaded");
+            GitException::Check(git_index_write(index));
+        }
+
+        void ClearEntries() {
+            if (!index) throw GitException("Index not loaded");
+            GitException::Check(git_index_clear(index));
+        }
+
+        void ReadTree(const GitTree& tree) {
+            if (!index) throw GitException("Index not loaded");
+            if (!tree.IsValid()) throw GitException("Tree not loaded");
+            GitException::Check(git_index_read_tree(index, tree.GetRawConst()));
+        }
+    };
+
+    class GitReference {
+        git_reference* ref = nullptr;
+        bool owned = true;
+
+    public:
+        GitReference() = default;
+        ~GitReference() { Clear(); }
+
+        GitReference(const GitReference&) = delete;
+        GitReference& operator=(const GitReference&) = delete;
+
+        GitReference(GitReference&& o) noexcept : ref(o.ref), owned(o.owned) {
+            o.ref = nullptr;
+            o.owned = false;
+        }
+        GitReference& operator=(GitReference&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                ref = o.ref;
+                owned = o.owned;
+                o.ref = nullptr;
+                o.owned = false;
+            }
+            return *this;
+        }
+
+        void Lookup(git_repository* repo, const std::string& name) {
+            Clear();
+            GitException::Check(git_reference_lookup(&ref, repo, name.c_str()));
+            owned = true;
+        }
+
+        void Head(git_repository* repo) {
+            Clear();
+            GitException::Check(git_repository_head(&ref, repo));
+            owned = true;
+        }
+
+        void Adopt(git_reference* r, bool take_ownership = true) {
+            Clear();
+            ref = r;
+            owned = take_ownership;
+        }
+
+        void Clear() {
+            if (ref && owned) {
+                git_reference_free(ref);
+            }
+            ref = nullptr;
+            owned = false;
+        }
+
+        bool IsValid() const { return ref != nullptr; }
+        git_reference* GetRaw() const { return ref; }
+
+        std::string Shorthand() const {
+            if (!ref) return "";
+            const char* s = git_reference_shorthand(ref);
+            return s ? s : "";
+        }
+
+        std::string Name() const {
+            if (!ref) return "";
+            const char* s = git_reference_name(ref);
+            return s ? s : "";
+        }
+
+        const git_oid* Target() const {
+            if (!ref) return nullptr;
+            return git_reference_target(ref);
+        }
+
+        bool IsBranch() const {
+            return ref && git_reference_is_branch(ref) == 1;
+        }
+
+        bool IsHead() const {
+            return ref && git_branch_is_head(ref) == 1;
+        }
+    };
+
+    class GitSignatureObj {
+        git_signature* sig = nullptr;
+
+    public:
+        GitSignatureObj() = default;
+        ~GitSignatureObj() { Clear(); }
+
+        GitSignatureObj(const GitSignatureObj&) = delete;
+        GitSignatureObj& operator=(const GitSignatureObj&) = delete;
+
+        GitSignatureObj(GitSignatureObj&& o) noexcept : sig(o.sig) { o.sig = nullptr; }
+        GitSignatureObj& operator=(GitSignatureObj&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                sig = o.sig;
+                o.sig = nullptr;
+            }
+            return *this;
+        }
+
+        void Create(const std::string& name, const std::string& email,
+            time_t when = 0, int offset = 0) {
+            Clear();
+            if (when == 0) when = time(nullptr);
+            GitException::Check(git_signature_new(&sig, name.c_str(), email.c_str(), when, offset));
+        }
+
+        void Now(const std::string& name, const std::string& email) {
+            Create(name, email, time(nullptr), 0);
+        }
+
+        void Clear() {
+            if (sig) {
+                git_signature_free(sig);
+                sig = nullptr;
+            }
+        }
+
+        bool IsValid() const { return sig != nullptr; }
+        git_signature* GetRaw() const { return sig; }
+    };
+
     class GitBranch {
     private:
         git_reference* ref = nullptr;
@@ -390,7 +607,8 @@ namespace GitWrapper {
         git_branch_t type;
         bool owned = false;
 
-        void Init(git_reference* branch_ref, git_repository* branch_repo, git_branch_t branch_type, bool branch_owned = true)
+        void Init(git_reference* branch_ref, git_repository* branch_repo,
+            git_branch_t branch_type, bool branch_owned = true)
         {
             ref = branch_ref;
             repo = branch_repo;
@@ -412,19 +630,20 @@ namespace GitWrapper {
             Init(ref, repo, branch_type);
         }
 
-        void Load(git_repository* repo, const std::string& name, git_branch_t branch_type = GIT_BRANCH_LOCAL) {
+        void Load(git_repository* repo, const std::string& name,
+            git_branch_t branch_type = GIT_BRANCH_LOCAL) {
             Clear();
             int error = git_branch_lookup(&ref, repo, name.c_str(), branch_type);
             GitException::Check(error);
             Init(ref, repo, branch_type);
         }
 
-        void Load(git_repository* repo, git_reference* ref, git_branch_t branch_type = GIT_BRANCH_LOCAL) {
+        void Load(git_repository* repo, git_reference* ref,
+            git_branch_t branch_type = GIT_BRANCH_LOCAL) {
             Clear();
             Init(ref, repo, branch_type);
         }
 
-        // Создать коммит
         std::string CreateCommit(const std::string& message,
             const std::string& author_name,
             const std::string& author_email,
@@ -432,57 +651,35 @@ namespace GitWrapper {
             const std::string& committer_email = "") {
             if (!ref) throw GitException("Branch not loaded");
 
-            // Получаем индекс
-            git_index* index = nullptr;
-            int error = git_repository_index(&index, repo);
-            GitException::Check(error);
+            GitIndex index;
+            index.Load(repo);
+            index.AddAll(GIT_INDEX_ADD_DEFAULT);
 
-            // Добавляем все изменения
-            error = git_index_add_all(index, nullptr, GIT_INDEX_ADD_DEFAULT, nullptr, nullptr);
-            GitException::Check(error);
-
-            // Пишем дерево
             git_oid tree_oid;
-            error = git_index_write_tree(&tree_oid, index);
-            GitException::Check(error);
+            index.WriteTree(&tree_oid);
+            index.Clear();
 
-            git_index_free(index);
+            GitTree tree;
+            tree.Load(repo, &tree_oid);
 
-            // Загружаем дерево
-            git_tree* tree = nullptr;
-            error = git_tree_lookup(&tree, repo, &tree_oid);
-            GitException::Check(error);
-
-            // Создаем подпись автора и коммитера
             const std::string committer_name_used = committer_name.empty() ? author_name : committer_name;
             const std::string committer_email_used = committer_email.empty() ? author_email : committer_email;
 
-            git_signature* author_sig = nullptr;
-            git_signature* committer_sig = nullptr;
+            GitSignatureObj author_sig;
+            author_sig.Now(author_name, author_email);
 
-            error = git_signature_new(&author_sig, author_name.c_str(), author_email.c_str(), time(nullptr), 0);
-            GitException::Check(error);
+            GitSignatureObj committer_sig;
+            committer_sig.Now(committer_name_used, committer_email_used);
 
-            error = git_signature_new(&committer_sig, committer_name_used.c_str(),
-                committer_email_used.c_str(), time(nullptr), 0);
-            GitException::Check(error);
+            GitCommit head = HeadCommit();
 
-            // Создаем коммит
             git_oid commit_oid;
+            const git_commit* parents[] = { head.GetRaw() };
 
-            // Загружаем родительский коммит
-            const git_commit* parents[] = { HeadCommit().GetRaw() };
-
-            error = git_commit_create(&commit_oid, repo, "HEAD",
-                author_sig, committer_sig,
+            GitException::Check(git_commit_create(&commit_oid, repo, "HEAD",
+                author_sig.GetRaw(), committer_sig.GetRaw(),
                 nullptr, message.c_str(),
-                tree, 1, parents);
-
-            git_signature_free(author_sig);
-            git_signature_free(committer_sig);
-            git_tree_free(tree);
-
-            GitException::Check(error);
+                tree.GetRaw(), 1, parents));
 
             char oid_str[GIT_OID_HEXSZ + 1];
             git_oid_fmt(oid_str, &commit_oid);
@@ -559,15 +756,13 @@ namespace GitWrapper {
 
     class GitRepository {
     private:
-        
-        // Добавляем callback для индикации прогресса
         struct CallbackPayload {
-            std::function<void(const std::string&)>* progress = nullptr;
-            std::function<void(int, int, int)>* transfer = nullptr;
+            std::function<void(const std::string&)> progress;
+            std::function<void(int, int, int)> transfer;
             GitCredentials credentials;
         };
 
-        CallbackPayload cb_payload = CallbackPayload();
+        CallbackPayload cb_payload;
 
         git_repository* repo = nullptr;
         std::string directory;
@@ -575,50 +770,43 @@ namespace GitWrapper {
 
         static int CredentialsCallback(
             git_cred** out,
-            const char* url,
+            const char* /*url*/,
             const char* username_from_url,
             unsigned int allowed_types, void* payload)
         {
-            // Если payload пустой, мы не можем получить токен или ключ — прерываем операцию
-            if (!payload) {
-                return GIT_EAUTH;
-            }
+            if (!payload) return GIT_EAUTH;
 
-            CallbackPayload* context = (CallbackPayload*)payload;
-            
-            // Если context неккоректный, мы не можем получить токен или ключ — прерываем операцию
-            if (!context) {
-                return GIT_EAUTH;
-            }
+            CallbackPayload* context = static_cast<CallbackPayload*>(payload);
+            if (!context) return GIT_EAUTH;
 
-            auto creds = &context->credentials;
+            auto* creds = &context->credentials;
 
-            // Защита от бесконечного цикла при неверном токене или ключе
             if (creds->attempt_count > 0) {
                 return GIT_EAUTH;
             }
             creds->attempt_count++;
 
-            // 1. Современный HTTPS: Авторизация через Personal Access Token
-            if (creds->type == GitCredentials::Type::TOKEN && (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT)) {
+            // 1. HTTPS: Personal Access Token
+            if (creds->type == GitCredentials::Type::TOKEN &&
+                (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT))
+            {
                 if (creds->token.empty()) {
-                    return GIT_EAUTH; // Без токена выполнение современного HTTPS невозможно
+                    return GIT_EAUTH;
                 }
 
-                // Для GitHub/GitLab имя пользователя может быть любым (например, "git"), 
-                // но если оно есть в URL или структуре — используем его.
-                std::string username = creds->username.empty() ?
-                    (username_from_url ? username_from_url : "git") :
-                    creds->username;
+                std::string username = creds->username.empty()
+                    ? (username_from_url ? username_from_url : "x-access-token")
+                    : creds->username;
 
-                // Токен передается в целевое поле пароля
                 return git_cred_userpass_plaintext_new(out, username.c_str(), creds->token.c_str());
             }
 
-            // 2. Современный SSH: Авторизация по приватным ключам
-            if (creds->type == GitCredentials::Type::SSH_KEY && (allowed_types & GIT_CREDENTIAL_SSH_KEY)) {
+            // 2. SSH: приватный ключ
+            if (creds->type == GitCredentials::Type::SSH_KEY &&
+                (allowed_types & GIT_CREDENTIAL_SSH_KEY))
+            {
                 if (creds->ssh_private_key_path.empty()) {
-                    return GIT_EAUTH; // Без приватного ключа SSH-авторизация невозможна
+                    return GIT_EAUTH;
                 }
 
                 return git_cred_ssh_key_new(out,
@@ -628,39 +816,35 @@ namespace GitWrapper {
                     creds->ssh_passphrase.empty() ? nullptr : creds->ssh_passphrase.c_str());
             }
 
-            // Если тип credentials не совпадает с тем, что просит сервер
             return GIT_PASSTHROUGH;
         }
 
-
         static int ProgressCallback(const char* str, int len, void* payload) {
-            if (!payload || !(str && len > 0)) return 0;
-            if (CallbackPayload* context = (CallbackPayload*)payload; context && context->progress)
-                (*context->progress)(std::string(str, len));
+            if (!payload || !str || len <= 0) return 0;
+            auto* context = static_cast<CallbackPayload*>(payload);
+            if (context && context->progress) {
+                context->progress(std::string(str, len));
+            }
             return 0;
         }
 
         static int TransferProgressCallback(const git_transfer_progress* stats, void* payload) {
             if (!payload || !stats) return 0;
-            if (CallbackPayload* context = (CallbackPayload*)payload; context && context->transfer)
-                (*context->transfer)(stats->received_objects, stats->total_objects, stats->indexed_objects);
+            auto* context = static_cast<CallbackPayload*>(payload);
+            if (context && context->transfer) {
+                context->transfer(stats->received_objects, stats->total_objects, stats->indexed_objects);
+            }
             return 0;
         }
 
         void InitialCallbacks(git_remote_callbacks& callbacks) {
-            
-            // Лишний раз в клюбэках не проверять на наличие указателей функций
-            if (cb_payload.progress && cb_payload.transfer)
-                callbacks.payload = &cb_payload;
+            callbacks.payload = &cb_payload;
 
             callbacks.credentials = CredentialsCallback;
             callbacks.sideband_progress = ProgressCallback;
             callbacks.transfer_progress = TransferProgressCallback;
 
-            callbacks.certificate_check = [](git_cert* cert, int valid, const char* host, void* payload) -> int {
-                (void)cert;
-                (void)host;
-                (void)payload;
+            callbacks.certificate_check = [](git_cert* /*cert*/, int valid, const char* /*host*/, void* /*payload*/) -> int {
                 return valid ? 0 : 1;
                 };
         }
@@ -676,45 +860,38 @@ namespace GitWrapper {
             Close();
         }
 
-        // Создать новый репозиторий
         void Init(const std::string& path, bool bare = false) {
             Close();
             directory = path;
-            int error = git_repository_init(&repo, directory.c_str(), bare);
-            GitException::Check(error);
+            GitException::Check(git_repository_init(&repo, directory.c_str(), bare));
             isOpen = true;
         }
 
-        // Открыть существующий репозиторий
         void Open(const std::string& path) {
             Close();
             directory = path;
-            int error = git_repository_open(&repo, path.c_str());
-            GitException::Check(error);
+            GitException::Check(git_repository_open(&repo, path.c_str()));
             isOpen = true;
         }
 
-        // Клонировать веб-репозиторий
         void Clone(const std::string& path, const std::string& url, const git_clone_options& opts) {
             Close();
             directory = path;
-            int error = git_clone(&repo, url.c_str(), directory.c_str(), &opts);
-            GitException::Check(error);
+            GitException::Check(git_clone(&repo, url.c_str(), directory.c_str(), &opts));
             isOpen = true;
         }
 
-        // Установка учетных данных для аутентификации
         void SetCredentials(const GitCredentials& creds) {
             cb_payload.credentials = creds;
+            cb_payload.credentials.attempt_count = 0;
         }
 
-        // Клонировать репозиторий
         void Clone(const std::string& url, const std::string& path,
             std::function<void(const std::string&)> progress_callback = nullptr,
-            std::function<void(int, int, int)> transfer_callback = nullptr) {
-            
-            cb_payload.progress = &progress_callback;
-            cb_payload.transfer = &transfer_callback;
+            std::function<void(int, int, int)> transfer_callback = nullptr)
+        {
+            cb_payload.progress = progress_callback;
+            cb_payload.transfer = transfer_callback;
 
             git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
             InitialCallbacks(opts.fetch_opts.callbacks);
@@ -727,11 +904,10 @@ namespace GitWrapper {
                 git_repository_free(repo);
                 repo = nullptr;
                 isOpen = false;
-                directory = "";
+                directory.clear();
             }
         }
 
-        // Статус
         GitStatusList GetStatus(unsigned int flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED) {
             if (!isOpen) throw GitException("Repository not open");
             return GitStatusList(repo, flags);
@@ -743,14 +919,12 @@ namespace GitWrapper {
             return status.IsModified();
         }
 
-        // Главный коммит 
         GitCommit GetHeadCommit() {
             if (!isOpen) throw GitException("Repository not open");
             GitBranch branch = GetHeadBranch();
             return branch.HeadCommit();
         }
 
-        // Главная ветка
         GitBranch GetHeadBranch() {
             if (!isOpen) throw GitException("Repository not open");
             GitBranch branch;
@@ -771,8 +945,7 @@ namespace GitWrapper {
             std::vector<GitBranch> branches;
 
             git_branch_iterator* iter = nullptr;
-            int error = git_branch_iterator_new(&iter, repo, type);
-            GitException::Check(error);
+            GitException::Check(git_branch_iterator_new(&iter, repo, type));
 
             git_reference* ref = nullptr;
             git_branch_t branch_type;
@@ -784,7 +957,6 @@ namespace GitWrapper {
                     branches.push_back(std::move(branch));
                 }
                 catch (const GitException&) {
-                    // Пропускаем ошибочные ветки
                     if (ref) {
                         git_reference_free(ref);
                         ref = nullptr;
@@ -800,24 +972,22 @@ namespace GitWrapper {
             return branches;
         }
 
-        // Создать коммит
         std::string CreateCommit(const std::string& message,
             const std::string& author_name,
             const std::string& author_email,
             const std::string& committer_name = "",
             const std::string& committer_email = "") {
             if (!isOpen) throw GitException("Repository not open");
-            return GetHeadBranch().CreateCommit(message, author_name, author_email, committer_name, committer_email);
+            return GetHeadBranch().CreateCommit(message, author_name, author_email,
+                committer_name, committer_email);
         }
 
-        // Работа с удаленными репозиториями
         std::vector<std::string> GetRemotes() const {
             if (!isOpen) throw GitException("Repository not open");
 
             std::vector<std::string> remotes;
             git_strarray remote_names;
-            int error = git_remote_list(&remote_names, repo);
-            GitException::Check(error);
+            GitException::Check(git_remote_list(&remote_names, repo));
 
             for (size_t i = 0; i < remote_names.count; ++i) {
                 remotes.push_back(remote_names.strings[i]);
@@ -831,105 +1001,128 @@ namespace GitWrapper {
             if (!isOpen) throw GitException("Repository not open");
 
             git_remote* remote = nullptr;
-            int error = git_remote_create(&remote, repo, name.c_str(), url.c_str());
-            GitException::Check(error);
-
+            GitException::Check(git_remote_create(&remote, repo, name.c_str(), url.c_str()));
             git_remote_free(remote);
         }
 
         void RemoveRemote(const std::string& name) {
             if (!isOpen) throw GitException("Repository not open");
-
-            int error = git_remote_delete(repo, name.c_str());
-            GitException::Check(error);
+            GitException::Check(git_remote_delete(repo, name.c_str()));
         }
 
-        // Fetch
         void Fetch(const std::string& remote_name = "origin",
             std::function<void(const std::string&)> progress_callback = nullptr,
-            std::function<void(int, int, int)> transfer_callback = nullptr) {
+            std::function<void(int, int, int)> transfer_callback = nullptr)
+        {
             if (!isOpen) throw GitException("Repository not open");
 
             git_remote* remote = nullptr;
-            int error = git_remote_lookup(&remote, repo, remote_name.c_str());
-            GitException::Check(error);
+            GitException::Check(git_remote_lookup(&remote, repo, remote_name.c_str()));
 
-            cb_payload.progress = &progress_callback;
-            cb_payload.transfer = &transfer_callback;
+            cb_payload.progress = progress_callback;
+            cb_payload.transfer = transfer_callback;
+            cb_payload.credentials.attempt_count = 0;
 
             git_fetch_options opts = GIT_FETCH_OPTIONS_INIT;
             InitialCallbacks(opts.callbacks);
 
-            error = git_remote_fetch(remote, nullptr, &opts, nullptr);
+            int error = git_remote_fetch(remote, nullptr, &opts, nullptr);
             git_remote_free(remote);
             GitException::Check(error);
         }
 
-        // Pull
-        void Pull(const std::string& remote_name = "origin",
-            std::function<void(const std::string&)> progress_callback = nullptr) {
+        void MergeFastForward(const std::string& remote_name = "origin") {
             if (!isOpen) throw GitException("Repository not open");
 
-            // Сначала fetch
-            Fetch(remote_name, progress_callback);
+            GitReference head_ref;
+            head_ref.Head(repo);
 
-            // Затем merge
-            git_reference* head = nullptr;
-            int error = git_repository_head(&head, repo);
-            GitException::Check(error);
+            std::string branch_name = head_ref.Shorthand();
+            if (branch_name.empty()) throw GitException("No current branch");
 
-            // Получаем ветку из удаленного репозитория
-            std::string branch_name = GetHeadBranch().GetName();
-            if (branch_name.empty()) {
-                git_reference_free(head);
-                throw GitException("No current branch");
+            std::string remote_ref_name = "refs/remotes/" + remote_name + "/" + branch_name;
+            GitReference remote_ref;
+            remote_ref.Lookup(repo, remote_ref_name);
+
+            const git_oid* head_oid = head_ref.Target();
+            const git_oid* remote_oid = remote_ref.Target();
+            if (!head_oid || !remote_oid) throw GitException("Missing oid");
+
+            if (git_oid_equal(head_oid, remote_oid)) {
+                std::cout << "Already up to date" << std::endl;
+                return;
             }
 
-            std::string remote_branch_ref = "refs/remotes/" + remote_name + "/" + branch_name;
+            git_oid merge_base;
+            GitException::Check(git_merge_base(&merge_base, repo, head_oid, remote_oid));
 
-            git_annotated_commit* commit = nullptr;
-            error = git_annotated_commit_from_fetchhead(&commit, repo,
-                remote_branch_ref.c_str(), remote_name.c_str(),
-                git_reference_target(head));
-
-            if (error == 0) {
-                git_merge_options merge_opts = GIT_MERGE_OPTIONS_INIT;
-                git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
-                checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
-
-                error = git_merge(repo, (const git_annotated_commit**)&commit, 1, &merge_opts, &checkout_opts);
-
-                if (error == 0) {
-                    // Проверяем конфликты
-                    git_index* index = nullptr;
-                    error = git_repository_index(&index, repo);
-                    if (error == 0) {
-                        if (git_index_has_conflicts(index)) {
-                            git_index_free(index);
-                            git_annotated_commit_free(commit);
-                            git_reference_free(head);
-                            throw GitException("Merge conflicts detected");
-                        }
-                        git_index_free(index);
-                    }
-                }
-
-                git_annotated_commit_free(commit);
+            if (!git_oid_equal(&merge_base, head_oid)) {
+                throw GitException("Non-fast-forward merge not implemented");
             }
 
-            git_reference_free(head);
-            GitException::Check(error);
+            std::cout << "Fast-forwarding..." << std::endl;
+
+            GitCommit remote_commit(repo, remote_oid);
+            GitTree remote_tree;
+            remote_tree.LoadFromCommit(remote_commit.GetRaw());
+
+            GitIndex index;
+            index.Load(repo);
+            index.ClearEntries();
+            index.ReadTree(remote_tree);
+            index.Write();
+
+            git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
+            checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE;
+            GitException::Check(git_checkout_tree(
+                repo, reinterpret_cast<const git_object*>(remote_tree.GetRaw()),
+                &checkout_opts));
+
+            git_reference* new_ref = nullptr;
+            GitException::Check(git_reference_set_target(
+                &new_ref, head_ref.GetRaw(), remote_oid, "Fast-forward merge"));
+            if (new_ref) git_reference_free(new_ref);
+
+            std::cout << "HEAD updated successfully" << std::endl;
         }
 
-        // Push
+        void Pull(const std::string& remote_name = "origin",
+            std::function<void(const std::string&)> progress_callback = nullptr,
+            std::function<void(int, int, int)> transfer_callback = nullptr)
+        {
+            try {
+                std::cout << "Fetching from " << remote_name << "..." << std::endl;
+                Fetch(remote_name, progress_callback, transfer_callback);
+
+                std::cout << "Merging changes..." << std::endl;
+                MergeFastForward(remote_name);
+
+                std::cout << "Pull completed successfully" << std::endl;
+            }
+            catch (const std::exception& e) {
+                std::cerr << "Pull failed: " << e.what() << std::endl;
+                throw;
+            }
+        }
+
+        bool HasUncommittedChanges() {
+            if (!isOpen) throw GitException("Repository not open");
+            GitStatusList status;
+            status.Refresh(repo,
+                GIT_STATUS_OPT_INCLUDE_UNTRACKED |
+                GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX |
+                GIT_STATUS_OPT_SORT_CASE_SENSITIVELY);
+            return status.Count() > 0;
+        }
+
         void Push(const std::string& remote_name = "origin", const std::string& branch = "",
             std::function<void(const std::string&)> progress_callback = nullptr,
-            std::function<void(int, int, int)> transfer_callback = nullptr) {
+            std::function<void(int, int, int)> transfer_callback = nullptr)
+        {
             if (!isOpen) throw GitException("Repository not open");
 
             git_remote* remote = nullptr;
-            int error = git_remote_lookup(&remote, repo, remote_name.c_str());
-            GitException::Check(error);
+            GitException::Check(git_remote_lookup(&remote, repo, remote_name.c_str()));
 
             std::string branch_name = branch.empty() ? GetHeadBranch().GetName() : branch;
             if (branch_name.empty()) {
@@ -939,8 +1132,9 @@ namespace GitWrapper {
 
             std::string branch_ref = "refs/heads/" + branch_name;
 
-            cb_payload.progress = &progress_callback;
-            cb_payload.transfer = &transfer_callback;
+            cb_payload.progress = progress_callback;
+            cb_payload.transfer = transfer_callback;
+            cb_payload.credentials.attempt_count = 0;
 
             git_push_options opts = GIT_PUSH_OPTIONS_INIT;
             InitialCallbacks(opts.callbacks);
@@ -950,12 +1144,11 @@ namespace GitWrapper {
             refspecs.count = 1;
             refspecs.strings = (char**)&refspec;
 
-            error = git_remote_push(remote, &refspecs, &opts);
+            int error = git_remote_push(remote, &refspecs, &opts);
             git_remote_free(remote);
             GitException::Check(error);
         }
 
-        // Получить информацию о репозитории
         std::string GetPath() const {
             return directory;
         }
@@ -984,7 +1177,6 @@ namespace GitWrapper {
             return repo;
         }
 
-        // Операторы сравнения
         bool operator==(const GitRepository& other) const {
             return repo == other.repo;
         }
@@ -993,14 +1185,15 @@ namespace GitWrapper {
             return !(*this == other);
         }
 
-        // Запрещаем копирование
         GitRepository(const GitRepository&) = delete;
         GitRepository& operator=(const GitRepository&) = delete;
 
-        // Разрешаем перемещение
         GitRepository(GitRepository&& other) noexcept
-            : repo(other.repo), directory(std::move(other.directory)), isOpen(other.isOpen),
-            cb_payload(std::move(other.cb_payload)) {
+            : cb_payload(std::move(other.cb_payload)),
+            repo(other.repo),
+            directory(std::move(other.directory)),
+            isOpen(other.isOpen)
+        {
             other.repo = nullptr;
             other.isOpen = false;
         }
@@ -1008,10 +1201,10 @@ namespace GitWrapper {
         GitRepository& operator=(GitRepository&& other) noexcept {
             if (this != &other) {
                 Close();
+                cb_payload = std::move(other.cb_payload);
                 repo = other.repo;
                 directory = std::move(other.directory);
                 isOpen = other.isOpen;
-                cb_payload = std::move(other.cb_payload);
                 other.repo = nullptr;
                 other.isOpen = false;
             }
@@ -1078,10 +1271,16 @@ namespace GitWrapper {
             return result;
         }
 
-        // Создание репозитория
         GitRepository OpenRepository(const std::string& path) {
             GitRepository repo;
             repo.Open(path);
+            return repo;
+        }
+
+        GitRepository OpenRepository(const std::string& path, const GitCredentials& creds) {
+            GitRepository repo;
+            repo.Open(path);
+            repo.SetCredentials(creds);
             return repo;
         }
 
@@ -1095,7 +1294,7 @@ namespace GitWrapper {
             const std::string& path,
             const GitCredentials& creds,
             std::function<void(const std::string&)> progress = nullptr,
-            std::function<void(int, int, int)> transfer = nullptr) 
+            std::function<void(int, int, int)> transfer = nullptr)
         {
             GitRepository repo;
             repo.SetCredentials(creds);
@@ -1106,7 +1305,7 @@ namespace GitWrapper {
         GitRepository CloneRepository(const std::string& url,
             const std::string& path,
             std::function<void(const std::string&)> progress = nullptr,
-            std::function<void(int, int, int)> transfer = nullptr) 
+            std::function<void(int, int, int)> transfer = nullptr)
         {
             return CloneRepository(url, path, GitCredentials::Anonymous(), progress, transfer);
         }
@@ -1114,11 +1313,11 @@ namespace GitWrapper {
 
 } // namespace GitWrapper
 
-void Progress(const std::string& progress) {
+inline void Progress(const std::string& progress) {
     std::cout << "[PROGRESS] " << progress << std::flush;
 }
 
-void Transfer(int received_objects, int total_objects, int indexed_objects) {
+inline void Transfer(int received_objects, int total_objects, int indexed_objects) {
     static int last_percent = -1;
 
     if (total_objects > 0) {
@@ -1143,34 +1342,49 @@ int main() {
 
         auto token_creds = GitWrapper::GitCredentials::Token(USER_NAME, USER_GHP_TOKEN);
 
-        auto repostory_test = git.CloneRepository(
+        /*
+        auto repository_test = git.CloneRepository(
             USER_URL_REPO,
             "./repo_token",
             token_creds,
             &Progress,
             &Transfer
         );
+        */
 
-        std::cout << "Repository cloned successfully!" << std::endl;
-        std::cout << "Path: " << repostory_test.GetPath() << std::endl;
+        auto repository_test = git.OpenRepository(
+            "./repo_token", token_creds
+        );
 
-        auto main_branch = repostory_test.GetBranch("main");
-        
-        std::cout << "branch name: [" + main_branch.GetName() << "]\n";
-        std::cout << "branch is head ? " + std::string((main_branch.IsHead() ? "YES" : "NO")) << "\n";
+        std::cout << "Path: " << repository_test.GetPath() << std::endl;
 
-        auto HeadCommit1 = main_branch.HeadCommit();
-        auto HeadCommitInfo1 = HeadCommit1.GetInfo();
+        auto main_branch = repository_test.GetBranch("main");
 
-        std::cout << "Author: " << HeadCommitInfo1.author.name << " <" << HeadCommitInfo1.author.email << ">\n";
-        std::cout << "Messasge: " << Utf8ToWindows1251(HeadCommitInfo1.message) << "\n";
+        std::cout << "branch name: [" << main_branch.GetName() << "]\n";
+        std::cout << "branch is head ? " << (main_branch.IsHead() ? "YES" : "NO") << "\n";
 
-        std::string hash_commit = main_branch.CreateCommit("Коммит #" + make_random_name(), HeadCommitInfo1.author.name, HeadCommitInfo1.author.email);
+        auto head_commit = main_branch.HeadCommit();
+        auto head_info = head_commit.GetInfo();
+
+        std::cout << "Author: " << head_info.author.name
+            << " <" << head_info.author.email << ">\n";
+        std::cout << "Message: " << Utf8ToWindows1251(head_info.message) << "\n";
+
+        std::string hash_commit = main_branch.CreateCommit(
+            "Коммит #" + make_random_name(),
+            head_info.author.name,
+            head_info.author.email);
         std::cout << "Hash commit: " << hash_commit << "\n";
-        repostory_test.Push("origin", "", &Progress, &Transfer);
 
-        std::cout << "Commit pushed!" << "\n";
+        // Push с прогрессом
+        std::cout << "Pushing to origin..." << std::endl;
+        repository_test.Push("origin", "", Progress, Transfer);
+        std::cout << "\nCommit pushed!" << "\n";
 
+        repository_test.Push("origin", "", &Progress, &Transfer);
+
+        // Pull тоже с прогрессом
+        repository_test.Pull("origin", Progress, Transfer);
     }
     catch (const GitWrapper::GitException& e) {
         std::cerr << "Error: " << e.what() << std::endl;
@@ -1180,6 +1394,10 @@ int main() {
             std::cerr << "Git error details: " << err->message << std::endl;
         }
     }
+    catch (const std::exception& e) {
+        std::cerr << "Std error: " << e.what() << std::endl;
+    }
 
     return 0;
 }
+
