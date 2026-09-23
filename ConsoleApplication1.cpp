@@ -1,4 +1,4 @@
-#pragma once
+
 #include "FileName.h"
 #include <git2.h>
 #include <string>
