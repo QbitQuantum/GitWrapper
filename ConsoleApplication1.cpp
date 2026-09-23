@@ -1381,8 +1381,6 @@ int main() {
         repository_test.Push("origin", "", Progress, Transfer);
         std::cout << "\nCommit pushed!" << "\n";
 
-        repository_test.Push("origin", "", &Progress, &Transfer);
-
         // Pull тоже с прогрессом
         repository_test.Pull("origin", Progress, Transfer);
     }
