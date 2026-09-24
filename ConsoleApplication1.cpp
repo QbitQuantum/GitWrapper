@@ -1,4 +1,3 @@
-
 #include <git2.h>
 #include <string>
 #include <vector>
@@ -143,6 +142,215 @@ namespace GitWrapper {
             creds.username = username;
             creds.token = token;
             return creds;
+        }
+    };
+
+    class GitStrArray {
+    private:
+        git_strarray array{};
+        bool owned = false;
+
+    public:
+        GitStrArray() = default;
+
+        ~GitStrArray() { Clear(); }
+
+        GitStrArray(const GitStrArray&) = delete;
+        GitStrArray& operator=(const GitStrArray&) = delete;
+
+        GitStrArray(GitStrArray&& o) noexcept
+            : array(o.array), owned(o.owned) {
+            o.array = {};
+            o.owned = false;
+        }
+
+        GitStrArray& operator=(GitStrArray&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                array = o.array;
+                owned = o.owned;
+                o.array = {};
+                o.owned = false;
+            }
+            return *this;
+        }
+
+        // Загрузить список строк (например, git_remote_list)
+        void Load(int (*func)(git_strarray*, git_repository*), git_repository* repo) {
+            Clear();
+            GitException::Check(func(&array, repo));
+            owned = true;
+        }
+
+        // Принять владение уже созданным массивом
+        void Adopt(git_strarray* raw, bool take_ownership = true) {
+            Clear();
+            if (raw) {
+                array = *raw;
+                owned = take_ownership;
+                raw->strings = nullptr;
+                raw->count = 0;
+            }
+        }
+
+        void Clear() {
+            if (owned && array.strings) {
+                git_strarray_dispose(&array);
+            }
+            array = {};
+            owned = false;
+        }
+
+        bool IsValid() const { return array.strings != nullptr; }
+
+        size_t Count() const { return array.count; }
+
+        const char* operator[](size_t i) const {
+            return (i < array.count) ? array.strings[i] : nullptr;
+        }
+
+        std::vector<std::string> ToVector() const {
+            std::vector<std::string> result;
+            result.reserve(array.count);
+            for (size_t i = 0; i < array.count; ++i) {
+                result.emplace_back(array.strings[i] ? array.strings[i] : "");
+            }
+            return result;
+        }
+
+        git_strarray* GetRaw() { return &array; }
+        const git_strarray* GetRaw() const { return &array; }
+    };
+
+    class GitRemote {
+    private:
+        git_remote* remote = nullptr;
+        bool owned = false;
+
+    public:
+        GitRemote() = default;
+
+        ~GitRemote() { Clear(); }
+
+        GitRemote(const GitRemote&) = delete;
+        GitRemote& operator=(const GitRemote&) = delete;
+
+        GitRemote(GitRemote&& o) noexcept
+            : remote(o.remote), owned(o.owned) {
+            o.remote = nullptr;
+            o.owned = false;
+        }
+
+        GitRemote& operator=(GitRemote&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                remote = o.remote;
+                owned = o.owned;
+                o.remote = nullptr;
+                o.owned = false;
+            }
+            return *this;
+        }
+
+        void Lookup(git_repository* repo, const std::string& name) {
+            Clear();
+            GitException::Check(git_remote_lookup(&remote, repo, name.c_str()));
+            owned = true;
+        }
+
+        void Create(git_repository* repo, const std::string& name, const std::string& url) {
+            Clear();
+            GitException::Check(git_remote_create(&remote, repo, name.c_str(), url.c_str()));
+            owned = true;
+        }
+
+        void Adopt(git_remote* r, bool take_ownership = true) {
+            Clear();
+            remote = r;
+            owned = take_ownership;
+        }
+
+        void Clear() {
+            if (remote && owned) {
+                git_remote_free(remote);
+            }
+            remote = nullptr;
+            owned = false;
+        }
+
+        bool IsValid() const { return remote != nullptr; }
+        git_remote* GetRaw() const { return remote; }
+
+        std::string Name() const {
+            if (!remote) return "";
+            const char* n = git_remote_name(remote);
+            return n ? n : "";
+        }
+
+        std::string Url() const {
+            if (!remote) return "";
+            const char* u = git_remote_url(remote);
+            return u ? u : "";
+        }
+    };
+
+    class GitBranchIterator {
+    private:
+        git_branch_iterator* iter = nullptr;
+        bool owned = false;
+
+    public:
+        GitBranchIterator() = default;
+
+        ~GitBranchIterator() { Clear(); }
+
+        GitBranchIterator(const GitBranchIterator&) = delete;
+        GitBranchIterator& operator=(const GitBranchIterator&) = delete;
+
+        GitBranchIterator(GitBranchIterator&& o) noexcept
+            : iter(o.iter), owned(o.owned) {
+            o.iter = nullptr;
+            o.owned = false;
+        }
+
+        GitBranchIterator& operator=(GitBranchIterator&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                iter = o.iter;
+                owned = o.owned;
+                o.iter = nullptr;
+                o.owned = false;
+            }
+            return *this;
+        }
+
+        void Create(git_repository* repo, git_branch_t type = GIT_BRANCH_ALL) {
+            Clear();
+            GitException::Check(git_branch_iterator_new(&iter, repo, type));
+            owned = true;
+        }
+
+        void Adopt(git_branch_iterator* i, bool take_ownership = true) {
+            Clear();
+            iter = i;
+            owned = take_ownership;
+        }
+
+        void Clear() {
+            if (iter && owned) {
+                git_branch_iterator_free(iter);
+            }
+            iter = nullptr;
+            owned = false;
+        }
+
+        bool IsValid() const { return iter != nullptr; }
+        git_branch_iterator* GetRaw() const { return iter; }
+
+        // Возвращает true, если удалось получить следующую ветку
+        bool Next(git_reference** out_ref, git_branch_t* out_type) {
+            if (!iter) return false;
+            return git_branch_next(out_ref, out_type, iter) == 0;
         }
     };
 
@@ -479,20 +687,24 @@ namespace GitWrapper {
     };
 
     class GitReference {
+    private:
         git_reference* ref = nullptr;
         bool owned = true;
 
     public:
         GitReference() = default;
+
         ~GitReference() { Clear(); }
 
         GitReference(const GitReference&) = delete;
         GitReference& operator=(const GitReference&) = delete;
 
-        GitReference(GitReference&& o) noexcept : ref(o.ref), owned(o.owned) {
+        GitReference(GitReference&& o) noexcept
+            : ref(o.ref), owned(o.owned) {
             o.ref = nullptr;
             o.owned = false;
         }
+
         GitReference& operator=(GitReference&& o) noexcept {
             if (this != &o) {
                 Clear();
@@ -546,8 +758,7 @@ namespace GitWrapper {
         }
 
         const git_oid* Target() const {
-            if (!ref) return nullptr;
-            return git_reference_target(ref);
+            return ref ? git_reference_target(ref) : nullptr;
         }
 
         bool IsBranch() const {
@@ -603,46 +814,57 @@ namespace GitWrapper {
 
     class GitBranch {
     private:
-        git_reference* ref = nullptr;
+        GitReference ref;
         git_repository* repo = nullptr;
-        git_branch_t type;
-        bool owned = false;
-
-        void Init(git_reference* branch_ref, git_repository* branch_repo,
-            git_branch_t branch_type, bool branch_owned = true)
-        {
-            ref = branch_ref;
-            repo = branch_repo;
-            type = branch_type;
-            owned = branch_owned;
-        }
+        git_branch_t type = GIT_BRANCH_LOCAL;
 
     public:
-        GitBranch() : type(GIT_BRANCH_LOCAL) {}
+        GitBranch() = default;
 
-        ~GitBranch() {
-            Clear();
+        ~GitBranch() { Clear(); }
+
+        GitBranch(const GitBranch&) = delete;
+        GitBranch& operator=(const GitBranch&) = delete;
+
+        GitBranch(GitBranch&& o) noexcept
+            : ref(std::move(o.ref)), repo(o.repo), type(o.type) {
+            o.repo = nullptr;
         }
 
-        void Load(git_repository* repo, git_branch_t branch_type = GIT_BRANCH_LOCAL) {
-            Clear();
-            int error = git_repository_head(&ref, repo);
-            GitException::Check(error);
-            Init(ref, repo, branch_type);
+        GitBranch& operator=(GitBranch&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                ref = std::move(o.ref);
+                repo = o.repo;
+                type = o.type;
+                o.repo = nullptr;
+            }
+            return *this;
         }
 
-        void Load(git_repository* repo, const std::string& name,
+        void Load(git_repository* r, git_branch_t branch_type = GIT_BRANCH_LOCAL) {
+            Clear();
+            repo = r;
+            type = branch_type;
+            ref.Head(r);
+        }
+
+        void Load(git_repository* r, const std::string& name,
             git_branch_t branch_type = GIT_BRANCH_LOCAL) {
             Clear();
-            int error = git_branch_lookup(&ref, repo, name.c_str(), branch_type);
-            GitException::Check(error);
-            Init(ref, repo, branch_type);
+            repo = r;
+            type = branch_type;
+            git_reference* raw = nullptr;
+            GitException::Check(git_branch_lookup(&raw, r, name.c_str(), branch_type));
+            ref.Adopt(raw, true);
         }
 
-        void Load(git_repository* repo, git_reference* ref,
+        void Load(git_repository* r, git_reference* raw_ref,
             git_branch_t branch_type = GIT_BRANCH_LOCAL) {
             Clear();
-            Init(ref, repo, branch_type);
+            repo = r;
+            type = branch_type;
+            ref.Adopt(raw_ref, true);
         }
 
         std::string CreateCommit(const std::string& message,
@@ -650,7 +872,7 @@ namespace GitWrapper {
             const std::string& author_email,
             const std::string& committer_name = "",
             const std::string& committer_email = "") {
-            if (!ref) throw GitException("Branch not loaded");
+            if (!ref.IsValid()) throw GitException("Branch not loaded");
 
             GitIndex index;
             index.Load(repo);
@@ -663,14 +885,14 @@ namespace GitWrapper {
             GitTree tree;
             tree.Load(repo, &tree_oid);
 
-            const std::string committer_name_used = committer_name.empty() ? author_name : committer_name;
-            const std::string committer_email_used = committer_email.empty() ? author_email : committer_email;
+            const std::string cname = committer_name.empty() ? author_name : committer_name;
+            const std::string cemail = committer_email.empty() ? author_email : committer_email;
 
             GitSignatureObj author_sig;
             author_sig.Now(author_name, author_email);
 
             GitSignatureObj committer_sig;
-            committer_sig.Now(committer_name_used, committer_email_used);
+            committer_sig.Now(cname, cemail);
 
             GitCommit head = HeadCommit();
 
@@ -689,29 +911,27 @@ namespace GitWrapper {
         }
 
         std::string GetName() const {
-            if (!ref) return "";
+            if (!ref.IsValid()) return "";
             const char* name = nullptr;
-            git_branch_name(&name, ref);
+            git_branch_name(&name, ref.GetRaw());
             return name ? name : "";
         }
 
         std::string GetFullName() const {
-            if (!ref) return "";
-            return git_reference_name(ref);
+            return ref.IsValid() ? ref.Name() : "";
         }
 
         GitCommit HeadCommit() const {
-            if (!ref) throw GitException("Branch not loaded");
+            if (!ref.IsValid()) throw GitException("Branch not loaded");
 
-            const git_oid* oid = git_reference_target(ref);
+            const git_oid* oid = ref.Target();
             if (!oid) throw GitException("Branch has no target");
 
             return GitCommit(repo, oid);
         }
 
         bool IsHead() const {
-            if (!ref) return false;
-            return git_branch_is_head(ref) == 1;
+            return ref.IsHead();
         }
 
         git_branch_t GetType() const {
@@ -719,39 +939,16 @@ namespace GitWrapper {
         }
 
         git_reference* GetRaw() const {
-            return ref;
+            return ref.GetRaw();
         }
 
         bool IsValid() const {
-            return ref != nullptr;
+            return ref.IsValid();
         }
 
         void Clear() {
-            if (ref && owned) {
-                git_reference_free(ref);
-            }
-            ref = nullptr;
-            owned = false;
-        }
-
-        GitBranch(const GitBranch&) = delete;
-        GitBranch& operator=(const GitBranch&) = delete;
-        GitBranch(GitBranch&& other) noexcept
-            : type(other.type), ref(other.ref), owned(other.owned) {
-            other.ref = nullptr;
-            other.owned = false;
-        }
-
-        GitBranch& operator=(GitBranch&& other) noexcept {
-            if (this != &other) {
-                Clear();
-                type = other.type;
-                ref = other.ref;
-                owned = other.owned;
-                other.ref = nullptr;
-                other.owned = false;
-            }
-            return *this;
+            ref.Clear();
+            repo = nullptr;
         }
     };
 
@@ -971,31 +1168,26 @@ namespace GitWrapper {
 
             std::vector<GitBranch> branches;
 
-            git_branch_iterator* iter = nullptr;
-            GitException::Check(git_branch_iterator_new(&iter, repo, type));
+            GitBranchIterator iter;
+            iter.Create(repo, type);
 
-            git_reference* ref = nullptr;
+            git_reference* raw_ref = nullptr;
             git_branch_t branch_type;
 
-            while (git_branch_next(&ref, &branch_type, iter) == 0) {
+            while (iter.Next(&raw_ref, &branch_type)) {
                 try {
                     GitBranch branch;
-                    branch.Load(repo, ref, branch_type);
+                    branch.Load(repo, raw_ref, branch_type);
                     branches.push_back(std::move(branch));
                 }
                 catch (const GitException&) {
-                    if (ref) {
-                        git_reference_free(ref);
-                        ref = nullptr;
+                    if (raw_ref) {
+                        git_reference_free(raw_ref);
+                        raw_ref = nullptr;
                     }
                 }
             }
 
-            if (ref) {
-                git_reference_free(ref);
-            }
-
-            git_branch_iterator_free(iter);
             return branches;
         }
 
@@ -1012,24 +1204,16 @@ namespace GitWrapper {
         std::vector<std::string> GetRemotes() const {
             if (!isOpen) throw GitException("Repository not open");
 
-            std::vector<std::string> remotes;
-            git_strarray remote_names;
-            GitException::Check(git_remote_list(&remote_names, repo));
-
-            for (size_t i = 0; i < remote_names.count; ++i) {
-                remotes.push_back(remote_names.strings[i]);
-            }
-
-            git_strarray_dispose(&remote_names);
-            return remotes;
+            GitStrArray remotes;
+            remotes.Load(git_remote_list, repo);
+            return remotes.ToVector();
         }
 
         void AddRemote(const std::string& name, const std::string& url) {
             if (!isOpen) throw GitException("Repository not open");
 
-            git_remote* remote = nullptr;
-            GitException::Check(git_remote_create(&remote, repo, name.c_str(), url.c_str()));
-            git_remote_free(remote);
+            GitRemote remote;
+            remote.Create(repo, name, url);
         }
 
         void RemoveRemote(const std::string& name) {
@@ -1042,15 +1226,13 @@ namespace GitWrapper {
         {
             if (!isOpen) throw GitException("Repository not open");
 
-            git_remote* remote = nullptr;
-            GitException::Check(git_remote_lookup(&remote, repo, remote_name.c_str()));
+            GitRemote remote;
+            remote.Lookup(repo, remote_name);
 
             git_fetch_options opts = GIT_FETCH_OPTIONS_INIT;
             InitialCallbacks(opts.callbacks, progress);
 
-            int error = git_remote_fetch(remote, nullptr, &opts, nullptr);
-            git_remote_free(remote);
-            GitException::Check(error);
+            GitException::Check(git_remote_fetch(remote.GetRaw(), nullptr, &opts, nullptr));
         }
 
         void MergeFastForward(const std::string& remote_name = "origin") {
@@ -1141,12 +1323,11 @@ namespace GitWrapper {
         {
             if (!isOpen) throw GitException("Repository not open");
 
-            git_remote* remote = nullptr;
-            GitException::Check(git_remote_lookup(&remote, repo, remote_name.c_str()));
+            GitRemote remote;
+            remote.Lookup(repo, remote_name);
 
             std::string branch_name = branch.empty() ? GetHeadBranch().GetName() : branch;
             if (branch_name.empty()) {
-                git_remote_free(remote);
                 throw GitException("No branch specified and no current branch");
             }
 
@@ -1160,9 +1341,7 @@ namespace GitWrapper {
             refspecs.count = 1;
             refspecs.strings = (char**)&refspec;
 
-            int error = git_remote_push(remote, &refspecs, &opts);
-            git_remote_free(remote);
-            GitException::Check(error);
+            GitException::Check(git_remote_push(remote.GetRaw(), &refspecs, &opts));
         }
 
         std::string GetPath() const {
