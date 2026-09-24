@@ -880,6 +880,15 @@ namespace GitWrapper {
                 };
         }
 
+        void Close() {
+            if (repo) {
+                git_repository_free(repo);
+                repo = nullptr;
+                isOpen = false;
+                directory.clear();
+            }
+        }
+
     public:
         GitRepository() = default;
 
@@ -924,15 +933,6 @@ namespace GitWrapper {
             InitialCallbacks(opts.fetch_opts.callbacks, progress);
 
             Clone(path, url, opts);
-        }
-
-        void Close() {
-            if (repo) {
-                git_repository_free(repo);
-                repo = nullptr;
-                isOpen = false;
-                directory.clear();
-            }
         }
 
         GitStatusList GetStatus(unsigned int flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED) {
