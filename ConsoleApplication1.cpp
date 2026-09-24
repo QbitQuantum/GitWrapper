@@ -78,7 +78,7 @@ namespace GitWrapper {
         }
     };
 
-    struct GitSignature {
+    struct GitSignatureInfo {
         std::string name;
         std::string email;
         time_t time = 0;
@@ -92,8 +92,8 @@ namespace GitWrapper {
     struct GitCommitInfo {
         std::string id;
         std::string message;
-        GitSignature author;
-        GitSignature committer;
+        GitSignatureInfo author;
+        GitSignatureInfo committer;
         time_t commit_time = 0;
         std::vector<std::string> parents;
     };
@@ -393,6 +393,76 @@ namespace GitWrapper {
         }
     };
 
+    class GitSignature {
+        git_signature* sig = nullptr;
+        bool owned = true;
+
+    public:
+        GitSignature() = default;
+        ~GitSignature() { Clear(); }
+
+        GitSignature(const GitSignature&) = delete;
+        GitSignature& operator=(const GitSignature&) = delete;
+
+        GitSignature(GitSignature&& o) noexcept
+            : sig(o.sig), owned(o.owned) {
+            o.sig = nullptr;
+            o.owned = false;
+        }
+
+        GitSignature& operator=(GitSignature&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                sig = o.sig;
+                owned = o.owned;
+                o.sig = nullptr;
+                o.owned = false;
+            }
+            return *this;
+        }
+
+        void Create(const std::string& name, const std::string& email,
+            time_t when = 0, int offset = 0) {
+            Clear();
+            if (when == 0) when = time(nullptr);
+            GitException::Check(git_signature_new(&sig, name.c_str(),
+                email.c_str(), when, offset));
+            owned = true;
+        }
+
+        void Now(const std::string& name, const std::string& email) {
+            Create(name, email, time(nullptr), 0);
+        }
+
+        void Adopt(const git_signature* signature) {
+            Clear();
+            sig = const_cast<git_signature*>(signature);
+            owned = false;
+        }
+
+        void Clear() {
+            if (sig && owned) {
+                git_signature_free(sig);
+            }
+            sig = nullptr;
+            owned = true;
+        }
+
+        bool IsValid() const { return sig != nullptr; }
+        git_signature* GetRaw() const { return sig; }
+
+        GitSignatureInfo GetInfo() const {
+            GitSignatureInfo info;
+            if (sig) {
+                info.name = sig->name ? sig->name : "";
+                info.email = sig->email ? sig->email : "";
+                info.time = sig->when.time;
+                info.offset = sig->when.offset;
+            }
+            return info;
+        }
+    };
+
     class GitCommit {
     private:
         git_commit* commit = nullptr;
@@ -429,50 +499,52 @@ namespace GitWrapper {
             if (!commit) throw GitException("Commit not loaded");
 
             GitCommitInfo info;
+            info.id = CommitID();
+            info.message = CommitMessage();
 
+            GitSignature author;
+            author.Adopt(git_commit_author(commit));
+            info.author = author.GetInfo();
+
+            GitSignature committer;
+            committer.Adopt(git_commit_committer(commit));
+            info.committer = committer.GetInfo();
+
+            info.commit_time = CommitTime();
+            info.parents = CommitParents();
+            return info;
+        }
+
+        std::string CommitID() const {
             char oid_str[GIT_OID_HEXSZ + 1];
             git_oid_fmt(oid_str, git_commit_id(commit));
             oid_str[GIT_OID_HEXSZ] = '\0';
-            info.id = oid_str;
+            return oid_str;
+        }
 
-            info.message = git_commit_message(commit) ? git_commit_message(commit) : "";
+        std::string CommitMessage() const {
+            return git_commit_message(commit) ? git_commit_message(commit) : "";
+        }
 
-            const git_signature* author = git_commit_author(commit);
-            if (author) {
-                info.author.name = author->name ? author->name : "";
-                info.author.email = author->email ? author->email : "";
-                info.author.time = author->when.time;
-                info.author.offset = author->when.offset;
-            }
+        size_t CommitParentCount() const {
+            return git_commit_parentcount(commit);
+        }
 
-            const git_signature* committer = git_commit_committer(commit);
-            if (committer) {
-                info.committer.name = committer->name ? committer->name : "";
-                info.committer.email = committer->email ? committer->email : "";
-                info.committer.time = committer->when.time;
-                info.committer.offset = committer->when.offset;
-            }
+        time_t CommitTime() const {
+            return git_commit_time(commit);
+        }
 
-            info.commit_time = git_commit_time(commit);
-
+        std::vector<std::string> CommitParents() const {
+            std::vector<std::string> parents;
             size_t parent_count = git_commit_parentcount(commit);
             for (size_t i = 0; i < parent_count; ++i) {
                 const git_oid* parent_oid = git_commit_parent_id(commit, i);
                 char parent_str[GIT_OID_HEXSZ + 1];
                 git_oid_fmt(parent_str, parent_oid);
                 parent_str[GIT_OID_HEXSZ] = '\0';
-                info.parents.push_back(parent_str);
+                parents.push_back(parent_str);
             }
-
-            return info;
-        }
-
-        std::string GetId() const {
-            if (!commit) return "";
-            char oid_str[GIT_OID_HEXSZ + 1];
-            git_oid_fmt(oid_str, git_commit_id(commit));
-            oid_str[GIT_OID_HEXSZ] = '\0';
-            return oid_str;
+            return parents;
         }
 
         git_commit* GetRaw() const { return commit; }
@@ -622,48 +694,6 @@ namespace GitWrapper {
             if (!tree.IsValid()) throw GitException("Tree not loaded");
             GitException::Check(git_index_read_tree(index, tree.GetRawConst()));
         }
-    };
-
-    class GitSignatureObj {
-        git_signature* sig = nullptr;
-
-    public:
-        GitSignatureObj() = default;
-        ~GitSignatureObj() { Clear(); }
-
-        GitSignatureObj(const GitSignatureObj&) = delete;
-        GitSignatureObj& operator=(const GitSignatureObj&) = delete;
-
-        GitSignatureObj(GitSignatureObj&& o) noexcept : sig(o.sig) { o.sig = nullptr; }
-        GitSignatureObj& operator=(GitSignatureObj&& o) noexcept {
-            if (this != &o) {
-                Clear();
-                sig = o.sig;
-                o.sig = nullptr;
-            }
-            return *this;
-        }
-
-        void Create(const std::string& name, const std::string& email,
-            time_t when = 0, int offset = 0) {
-            Clear();
-            if (when == 0) when = time(nullptr);
-            GitException::Check(git_signature_new(&sig, name.c_str(), email.c_str(), when, offset));
-        }
-
-        void Now(const std::string& name, const std::string& email) {
-            Create(name, email, time(nullptr), 0);
-        }
-
-        void Clear() {
-            if (sig) {
-                git_signature_free(sig);
-                sig = nullptr;
-            }
-        }
-
-        bool IsValid() const { return sig != nullptr; }
-        git_signature* GetRaw() const { return sig; }
     };
 
     class GitReference {
@@ -867,10 +897,10 @@ namespace GitWrapper {
             const std::string cname = committer_name.empty() ? author_name : committer_name;
             const std::string cemail = committer_email.empty() ? author_email : committer_email;
 
-            GitSignatureObj author_sig;
+            GitSignature author_sig;
             author_sig.Now(author_name, author_email);
 
-            GitSignatureObj committer_sig;
+            GitSignature committer_sig;
             committer_sig.Now(cname, cemail);
 
             GitCommit head = HeadCommit();
