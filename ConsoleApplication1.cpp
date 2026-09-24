@@ -181,16 +181,6 @@ namespace GitWrapper {
             owned = true;
         }
 
-        void Adopt(git_strarray* raw, bool take_ownership = true) {
-            Clear();
-            if (raw) {
-                array = *raw;
-                owned = take_ownership;
-                raw->strings = nullptr;
-                raw->count = 0;
-            }
-        }
-
         void Clear() {
             if (owned && array.strings) {
                 git_strarray_dispose(&array);
@@ -683,10 +673,10 @@ namespace GitWrapper {
             }
         }
 
-        void Adopt(git_reference* r, bool take_ownership = true) {
+        void Adopt(git_reference* r) {
             Clear();
             ref = r;
-            owned = take_ownership;
+            owned = true;
         }
 
         void Clear() {
@@ -723,48 +713,6 @@ namespace GitWrapper {
         bool IsHead() const {
             return ref && git_branch_is_head(ref) == 1;
         }
-    };
-
-    class GitSignatureObj {
-        git_signature* sig = nullptr;
-
-    public:
-        GitSignatureObj() = default;
-        ~GitSignatureObj() { Clear(); }
-
-        GitSignatureObj(const GitSignatureObj&) = delete;
-        GitSignatureObj& operator=(const GitSignatureObj&) = delete;
-
-        GitSignatureObj(GitSignatureObj&& o) noexcept : sig(o.sig) { o.sig = nullptr; }
-        GitSignatureObj& operator=(GitSignatureObj&& o) noexcept {
-            if (this != &o) {
-                Clear();
-                sig = o.sig;
-                o.sig = nullptr;
-            }
-            return *this;
-        }
-
-        void Create(const std::string& name, const std::string& email,
-            time_t when = 0, int offset = 0) {
-            Clear();
-            if (when == 0) when = time(nullptr);
-            GitException::Check(git_signature_new(&sig, name.c_str(), email.c_str(), when, offset));
-        }
-
-        void Now(const std::string& name, const std::string& email) {
-            Create(name, email, time(nullptr), 0);
-        }
-
-        void Clear() {
-            if (sig) {
-                git_signature_free(sig);
-                sig = nullptr;
-            }
-        }
-
-        bool IsValid() const { return sig != nullptr; }
-        git_signature* GetRaw() const { return sig; }
     };
 
     class GitBranch {
@@ -817,7 +765,7 @@ namespace GitWrapper {
             Clear();
             repo = r;
             type = GIT_BRANCH_LOCAL;
-            ref.Adopt(new_ref, true);
+            ref.Adopt(new_ref);
         }
 
         void CreateFromCommit(git_repository* r, const std::string& branch_name,
@@ -832,7 +780,7 @@ namespace GitWrapper {
             Clear();
             repo = r;
             type = GIT_BRANCH_LOCAL;
-            ref.Adopt(new_ref, true);
+            ref.Adopt(new_ref);
         }
 
         void CreateFromOid(git_repository* r, const std::string& branch_name,
@@ -852,7 +800,7 @@ namespace GitWrapper {
             Clear();
             repo = r;
             type = GIT_BRANCH_LOCAL;
-            ref.Adopt(new_ref, true);
+            ref.Adopt(new_ref);
         }
 
         void CreateFromCurrent(const std::string& branch_name, bool force = false) {
@@ -874,7 +822,7 @@ namespace GitWrapper {
             Clear();
             repo = saved_repo;
             type = GIT_BRANCH_LOCAL;
-            ref.Adopt(new_ref, true);
+            ref.Adopt(new_ref);
         }
 
         void LoadHead(git_repository* r) {
@@ -884,7 +832,7 @@ namespace GitWrapper {
 
             git_reference* head_ref = nullptr;
             GitException::Check(git_repository_head(&head_ref, r));
-            ref.Adopt(head_ref, true);
+            ref.Adopt(head_ref);
         }
 
         void Load(git_repository* r, const std::string& name,
@@ -895,7 +843,7 @@ namespace GitWrapper {
 
             git_reference* raw = nullptr;
             GitException::Check(git_branch_lookup(&raw, r, name.c_str(), branch_type));
-            ref.Adopt(raw, true);
+            ref.Adopt(raw);
         }
 
         void LoadDup(git_repository* r, git_reference* raw_ref,
@@ -984,6 +932,48 @@ namespace GitWrapper {
             ref.Clear();
             repo = nullptr;
         }
+    };
+
+    class GitSignatureObj {
+        git_signature* sig = nullptr;
+
+    public:
+        GitSignatureObj() = default;
+        ~GitSignatureObj() { Clear(); }
+
+        GitSignatureObj(const GitSignatureObj&) = delete;
+        GitSignatureObj& operator=(const GitSignatureObj&) = delete;
+
+        GitSignatureObj(GitSignatureObj&& o) noexcept : sig(o.sig) { o.sig = nullptr; }
+        GitSignatureObj& operator=(GitSignatureObj&& o) noexcept {
+            if (this != &o) {
+                Clear();
+                sig = o.sig;
+                o.sig = nullptr;
+            }
+            return *this;
+        }
+
+        void Create(const std::string& name, const std::string& email,
+            time_t when = 0, int offset = 0) {
+            Clear();
+            if (when == 0) when = time(nullptr);
+            GitException::Check(git_signature_new(&sig, name.c_str(), email.c_str(), when, offset));
+        }
+
+        void Now(const std::string& name, const std::string& email) {
+            Create(name, email, time(nullptr), 0);
+        }
+
+        void Clear() {
+            if (sig) {
+                git_signature_free(sig);
+                sig = nullptr;
+            }
+        }
+
+        bool IsValid() const { return sig != nullptr; }
+        git_signature* GetRaw() const { return sig; }
     };
 
     struct ProgressState {
