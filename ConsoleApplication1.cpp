@@ -1339,16 +1339,16 @@ int main() {
         GitWrapper::ProgressState ps_clone;
 
         /*
+        auto repository_test = git.OpenRepository(
+            "./repo_token", token_creds
+        );
+        */
+
         auto repository_test = git.CloneRepository(
             USER_URL_REPO,
             "./repo_token",
             token_creds,
             &ps_clone
-        );
-        */
-
-        auto repository_test = git.OpenRepository(
-            "./repo_token", token_creds
         );
 
         std::cout << "Path: " << repository_test.GetPath() << std::endl;
