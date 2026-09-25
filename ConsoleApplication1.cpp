@@ -737,18 +737,26 @@ namespace GitWrapper {
             owned = true;
         }
 
+        void FindName(git_repository* repo, const std::string& name,
+            git_branch_t branch_type = GIT_BRANCH_LOCAL) {
+            Clear();
+            GitException::Check(git_branch_lookup(&ref, repo, name.c_str(), branch_type));
+            owned = true;
+        }
+
+        void BranchCreate(git_repository* repo, const std::string& name,
+            const git_commit* commit, bool force) {
+            Clear();
+            GitException::Check(git_branch_create(&ref, repo, name.c_str(), commit, force));
+            owned = true;
+        }
+
         void AdoptDup(git_reference* r) {
             Clear();
             if (r) {
                 GitException::Check(git_reference_dup(&ref, r));
                 owned = true;
             }
-        }
-
-        void Adopt(git_reference* r) {
-            Clear();
-            ref = r;
-            owned = true;
         }
 
         void Clear() {
@@ -793,6 +801,12 @@ namespace GitWrapper {
         git_repository* repo = nullptr;
         git_branch_t type = GIT_BRANCH_LOCAL;
 
+        void init(GitReference& ref_, git_repository* r, git_branch_t type_) {
+            ref = std::move(ref_);
+            repo = r;
+            type = type_;
+        }
+
     public:
         GitBranch() = default;
         ~GitBranch() { Clear(); }
@@ -816,48 +830,40 @@ namespace GitWrapper {
             return *this;
         }
 
-        // Единственное место, где реально создаётся ветка
-        void CreateFromCommit(git_repository* r, const std::string& name,
-            const GitCommit& commit, bool force = false) {
-            if (!r) throw GitException("Repository is null");
-            if (!commit.GetRaw()) throw GitException("Commit is null");
-
-            git_reference* new_ref = nullptr;
-            GitException::Check(git_branch_create(&new_ref, r, name.c_str(), commit.GetRaw(), force ? 1 : 0));
-            Clear();
-            repo = r;
-            type = GIT_BRANCH_LOCAL;
-            ref.Adopt(new_ref);
-        }
-
         void CreateFromHead(git_repository* r, const std::string& name, bool force = false) {
             if (!r) throw GitException("Repository is null");
             GitCommit commit = HeadCommit();
             CreateFromCommit(r, name, commit, force);
         }
 
+        // Единственное место, где реально создаётся ветка
+        void CreateFromCommit(git_repository* r, const std::string& name,
+            const GitCommit& commit, bool force = false) {
+            if (!r) throw GitException("Repository is null");
+            if (!commit.GetRaw()) throw GitException("Commit is null");
+            Clear();
+            GitReference new_ref;
+            new_ref.BranchCreate(r, name, commit.GetRaw(), force);
+            init(new_ref, r, GIT_BRANCH_LOCAL);
+        }
+
         void LoadHead(git_repository* r) {
             Clear();
-            repo = r;
-            type = GIT_BRANCH_LOCAL;
-
-            git_reference* head_ref = nullptr;
-            GitException::Check(git_repository_head(&head_ref, r));
-            ref.Adopt(head_ref);
+            GitReference head_ref;
+            head_ref.Head(r);
+            init(head_ref, r, GIT_BRANCH_LOCAL);
         }
 
-        void Load(git_repository* r, const std::string& name,
+        void LoadFindName(git_repository* r, const std::string& name,
             git_branch_t branch_type = GIT_BRANCH_LOCAL) {
             Clear();
-            repo = r;
-            type = branch_type;
-
-            git_reference* raw = nullptr;
-            GitException::Check(git_branch_lookup(&raw, r, name.c_str(), branch_type));
-            ref.Adopt(raw);
+            GitReference find_ref;
+            find_ref.FindName(r, name, branch_type);
+            init(find_ref, r, branch_type);
         }
 
-        void LoadDup(git_repository* r, git_reference* raw_ref,
+        // TODO: После полной инкапсуляции удалить
+        void LoadDup(git_repository* r, git_reference* raw_ref, 
             git_branch_t branch_type = GIT_BRANCH_LOCAL) {
             Clear();
             repo = r;
@@ -1122,33 +1128,6 @@ namespace GitWrapper {
             Clone(path, url, opts);
         }
 
-        void RefreshBranches(git_branch_t type = GIT_BRANCH_ALL) {
-            if (!isOpen) throw GitException("Repository not open");
-
-            branches_.clear();
-
-            GitBranchIterator iter;
-            iter.Create(repo, type);
-
-            git_reference* raw_ref = nullptr;
-            git_branch_t branch_type;
-
-            while (iter.Next(&raw_ref, &branch_type)) {
-                try {
-                    GitBranch branch;
-                    branch.LoadDup(repo, raw_ref, branch_type);
-                    branches_.push_back(std::move(branch));
-                }
-                catch (const GitException&) {
-                    // пропускаем сломанные ветки
-                }
-                git_reference_free(raw_ref);
-                raw_ref = nullptr;
-            }
-
-            branches_loaded_ = true;
-        }
-
         void RefreshCurrentBranch() {
             if (!isOpen) throw GitException("Repository not open");
             current_branch_ = std::move(GetHeadBranch());
@@ -1178,7 +1157,7 @@ namespace GitWrapper {
         GitBranch GetBranch(const std::string& name, git_branch_t type = GIT_BRANCH_LOCAL) {
             if (!isOpen) throw GitException("Repository not open");
             GitBranch branch;
-            branch.Load(repo, name, type);
+            branch.LoadFindName(repo, name, type);
             return branch;
         }
 
@@ -1213,6 +1192,13 @@ namespace GitWrapper {
             }
 
             return branches;
+        }
+
+        void RefreshBranches(git_branch_t type = GIT_BRANCH_ALL) {
+            if (!isOpen) throw GitException("Repository not open");
+            branches_.clear();
+            branches_ = std::move(GetBranches(type));
+            branches_loaded_ = true;
         }
 
         // Создать ветку от произвольного коммита
