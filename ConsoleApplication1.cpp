@@ -884,7 +884,6 @@ namespace GitWrapper {
 
             git_oid tree_oid;
             index.WriteTree(&tree_oid);
-            index.Clear();
 
             GitTree tree;
             tree.Load(repo, &tree_oid);
@@ -909,7 +908,8 @@ namespace GitWrapper {
             }
 
             git_oid commit_oid;
-            GitException::Check(git_commit_create(&commit_oid, repo, "HEAD",
+            GitException::Check(git_commit_create(&commit_oid, repo, 
+                GetFullName().c_str(),
                 author_sig.GetRaw(), committer_sig.GetRaw(),
                 nullptr, message.c_str(),
                 tree.GetRaw(), parent_count, parents));
